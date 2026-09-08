@@ -34,7 +34,7 @@ before the next begins.
 | 1 | Sportmonks API connection | **Done** |
 | 2 | Database schema | **Done** |
 | 3 | Historical data ingestion | **Done** |
-| 4 | Feature engineering | Not started |
+| 4 | Feature engineering | **Done** |
 | 5 | Poisson baseline model | Not started |
 | 6 | XGBoost model | Not started |
 | 7 | Backtesting (walk-forward) | Not started |
@@ -308,6 +308,113 @@ python3 -m pytest -v
   session (no real Sportmonks token available). Everything above is
   verified against a real PostgreSQL database and mocked HTTP responses,
   not a real Sportmonks account.
+
+## Phase 4 — Feature engineering
+
+**What was built**
+
+- `backend/app/common/` — a small refactor extracted from Phase 3 so this
+  phase could reuse it cleanly: `batch.py` (`BatchSummary`, the
+  fetched/upserted/failed/errors result every batch pipeline now returns)
+  and `upsert.py` (the generic `INSERT ... ON CONFLICT DO UPDATE` helper).
+  `app/ingestion/` was updated to use these instead of its own copies —
+  same behavior, no duplicated logic between ingestion and features.
+- `backend/app/features/team_match_log.py` — `fetch_team_appearances`
+  turns a team's fixtures (home and away) into a flat list of
+  "appearances", each carrying its own `kickoff`, this team's goals/xG/
+  stats as "for" and the opponent's as "against". This "long" shape is
+  what makes rolling-window computation simple: it's just "filter to
+  `kickoff < before`, take the most recent N".
+- `backend/app/features/rolling.py` — pure, DB-free rolling-window
+  computation. This is where the leakage boundary is enforced, once, for
+  every stat: `compute_rolling_stats` only considers appearances with
+  `kickoff < before` (strictly before). Since a fixture's own kickoff is
+  never less than itself, asking for a fixture's features with
+  `before=fixture.kickoff` can never include that fixture's own result —
+  even for a fixture that has already been played, which is exactly what
+  backtesting needs. Produces all 66 `team_features` columns (10 stats ×
+  3 windows × overall/venue-specific), generated from the same
+  `STAT_KEYS`/`ROLLING_WINDOWS`/`FEATURE_CONTEXTS` constants the Phase 2
+  schema uses, with an import-time assertion that the stat-accessor table
+  can never silently drift from `STAT_KEYS`.
+- `backend/app/features/league_features.py` / `h2h_features.py` — league
+  scoring-environment context (scoped to the fixture's own season, since
+  scoring environments shift year to year) and head-to-head history
+  (gated behind a minimum sample size — `MIN_H2H_MATCHES = 2` — per the
+  spec's "where sufficient historical data exists"), both using the same
+  strict `kickoff < before` cutoff.
+- `backend/app/features/service.py` — `compute_features_for_fixture`
+  (one fixture → home/away `team_features` rows + one `match_features`
+  row) and `compute_and_store_features_for_fixtures` (the batch driver,
+  same per-item SAVEPOINT + `BatchSummary` error-isolation pattern as
+  ingestion). Works for fixtures of **any** status — an upcoming fixture
+  needs features computed for it (for the daily ranking) exactly as much
+  as a historical one does (for training), and both get them from the
+  same code path with no special-casing.
+- `backend/app/features/cli.py` — `python -m app.features.cli build
+  --start ... --end ...`.
+
+**Tests** (`backend/tests/`, 126 tests total — 31 new in this phase, all passing)
+
+- `test_rolling_features.py` (pure, no DB) — the leakage boundary itself:
+  an appearance exactly at the cutoff is excluded, one strictly before is
+  included, and appearances *after* the cutoff (a team's later matches,
+  already in the DB) never leak in. Also: exact-window averaging, taking
+  only the most recent N when more history exists, fewer-than-window
+  handling, a stat that's missing on every match in the window resolving
+  to `None` (not `0.0`), partial-missing values averaging only what's
+  present, BTTS/Over-2.5 percentage correctness, venue-context filtering,
+  and that the generated column set exactly matches the Phase 2 schema.
+- `test_league_h2h_features.py` (real PostgreSQL) — league averages
+  computed correctly and season-scoped; a match exactly at the cutoff
+  excluded; h2h below/at the minimum-sample threshold; both venue orders
+  of a matchup counted as the same head-to-head history; unrelated
+  matchups correctly excluded.
+- `test_features_service.py` (real PostgreSQL) — **the single most
+  important test in this phase**,
+  `test_a_fixtures_own_result_never_leaks_into_its_own_features`: a
+  fixture is marked `FT` with a score recorded, and computing *that same
+  fixture's* features is proven to use only the three matches before it,
+  never its own result. Also: home/away appearance extraction and xG
+  for/against joins are correct; matches without a recorded result are
+  excluded from a team's history; an upcoming (`NS`) fixture still gets
+  full features from prior history; league/h2h values flow through into
+  `match_features`; the batch driver persists rows, is idempotent, and
+  isolates one bad fixture from the rest of the batch.
+- Manually verified end-to-end against a real (non-test) database outside
+  the pytest transaction-rollback harness: seeded a small league/three
+  teams/two fixtures, ran `compute_and_store_features_for_fixtures`, and
+  confirmed the stored `team_features`/`match_features` rows matched the
+  expected values by hand.
+
+Run them yourself (requires a local PostgreSQL instance):
+
+```bash
+cd platform/backend
+export TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/football_platform_test
+python3 -m pytest -v
+```
+
+**Remaining risks / open items for later phases**
+
+- Box-score stats (`shots`, `shots_on_target`, `big_chances`, `corners`)
+  and `xg`/`xga` will be `None` in every `team_features` row until Phase
+  3's `sportmonks_reference.py` type IDs are configured with real values
+  — the goals-based stats (`goals_scored`, `goals_conceded`, `btts_pct`,
+  `over_2_5_pct`) don't depend on that and are already fully correct.
+- `data_completeness_score` (on `match_features`) is a simple, explicitly
+  documented placeholder heuristic (how much of the last-10-match window
+  is filled in, averaged across both teams). Phase 11 (ranking/
+  confidence) may want something more sophisticated; this is a reasonable
+  default in the meantime, not a final design.
+- League features are scoped to the fixture's own season by design — this
+  means early-season fixtures have a small `league_sample_size` (honestly
+  reported, not hidden). No cross-season blending or shrinkage is applied;
+  that's a modeling decision left to Phase 5/6 if needed, not a Phase 4
+  concern.
+- `fetch_team_appearances` loads a team's entire history unbounded (no
+  pagination/limit) — correct, but a known scaling consideration for
+  leagues with many years of data once ingestion volume grows.
 
 See `docs/SETUP.md` for environment setup instructions and
 `docs/DATABASE.md` for the full schema reference.

@@ -98,6 +98,19 @@ writes `sportmonks_predictions`/`odds` for historical data — see
 `--with-statistics`, fill in the real Sportmonks `type_id`/`market_id`
 values in `app/ingestion/sportmonks_reference.py` (currently placeholders).
 
+## 7. Compute features
+
+```bash
+cd platform/backend
+python3 -m app.features.cli build --start 2019-08-01 --end 2025-08-01
+```
+
+Computes `team_features`/`match_features` for every fixture kicking off in
+that range — including upcoming, not-yet-played fixtures, which need
+features for the daily ranking just as much as historical ones need them
+for training. Safe to re-run (idempotent). See `platform/README.md`'s
+Phase 4 section for how the leakage boundary is enforced.
+
 ## Environment variables
 
 | Variable | Required | Default | Purpose |

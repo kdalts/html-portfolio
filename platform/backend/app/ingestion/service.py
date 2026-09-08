@@ -23,11 +23,11 @@ upcoming fixture kicks off, and the leakage guard enforces that the
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from app.common.batch import BatchSummary as IngestionSummary
 from app.db.models.fixtures import Fixture
 from app.ingestion import mappers, repository
 from app.integrations.sportmonks.client import SportmonksClient
@@ -35,22 +35,6 @@ from app.integrations.sportmonks.client import SportmonksClient
 logger = logging.getLogger(__name__)
 
 FIXTURES_DEFAULT_INCLUDE = "participants;scores;state;league;season"
-
-
-@dataclass
-class IngestionSummary:
-    fetched: int = 0
-    upserted: int = 0
-    failed: int = 0
-    errors: list[str] = field(default_factory=list)
-
-    def record_error(self, identifier: object, exc: Exception) -> None:
-        self.failed += 1
-        self.errors.append(f"{identifier}: {exc}")
-
-    def __bool__(self) -> bool:
-        """A summary is "successful" if nothing failed."""
-        return self.failed == 0
 
 
 def ingest_leagues(client: SportmonksClient, session: Session, *, commit: bool = True) -> IngestionSummary:
