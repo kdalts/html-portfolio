@@ -122,6 +122,20 @@ Requires features to already be computed for those fixtures (step 7).
 Writes `expected_home_goals`/`expected_away_goals`/`poisson_probability`
 onto `model_predictions`. Safe to re-run.
 
+## 9. Train and run the XGBoost model
+
+```bash
+cd platform/backend
+python3 -m app.models.ml_cli train --train-start 2019-08-01 --train-end 2023-08-01 --val-end 2024-08-01
+python3 -m app.models.ml_cli predict --start 2024-08-01 --end 2024-09-01
+```
+
+Training only uses fixtures with a known result and computed features
+(chronologically split — never shuffled). Saves a model artifact under
+`backend/artifacts/xgboost/` (git-ignored). `predict` requires a trained
+artifact and writes `ml_probability` onto `model_predictions`, merging
+into the same row Poisson wrote to.
+
 ## Environment variables
 
 | Variable | Required | Default | Purpose |

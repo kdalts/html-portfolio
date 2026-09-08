@@ -36,7 +36,7 @@ before the next begins.
 | 3 | Historical data ingestion | **Done** |
 | 4 | Feature engineering | **Done** |
 | 5 | Poisson baseline model | **Done** |
-| 6 | XGBoost model | Not started |
+| 6 | XGBoost model | **Done** |
 | 7 | Backtesting (walk-forward) | Not started |
 | 8 | Probability calibration | Not started |
 | 9 | Sportmonks model integration | Not started |
@@ -484,6 +484,88 @@ python3 -m pytest -v
   cross-checked against an xG-based expected-goals sanity check.
   `window` defaults to 10 matches; no tuning of window size against
   held-out data has been done yet — that's what Phase 7 backtesting is for.
+
+## Phase 6 — XGBoost model
+
+**What was built**
+
+- `backend/app/models/dataset.py` — assembles one training row per
+  finished fixture: the home team's `team_features` columns prefixed
+  `home_`, the away team's prefixed `away_`, `match_features`' league/h2h
+  columns as-is, plus `fixture_id`/`kickoff`/`league_id`/`over_2_5`
+  (`META_COLUMNS`, excluded from the feature set). `build_feature_row_for_fixture`
+  does the same for a single fixture without requiring a known result —
+  used at prediction time for upcoming fixtures.
+- `backend/app/models/chronological_split.py` — splits a DataFrame into
+  train/val/test purely by kickoff cutoffs. No shuffling step exists to
+  get wrong: filtering by date inherently preserves time order. Per spec
+  ("never randomly shuffle historical matches across time"), this is the
+  only splitting mechanism used anywhere in training.
+- `backend/app/models/xgboost_model.py` — a thin, DB-free wrapper around
+  `xgboost.train`: `binary:logistic` objective, trains only on the train
+  partition, uses the validation partition solely for early stopping/
+  reporting (never gradient updates — the held-out test evaluation is
+  Phase 7's backtesting, not this). Missing feature values (expected in
+  practice — box-score stats/xG stay `None` until Phase 3's placeholder
+  type IDs are configured, and early-season rolling windows are
+  naturally incomplete) go straight to XGBoost's native missing-value
+  handling rather than being imputed.
+- `backend/app/models/ml_service.py` — `train_and_save_model` writes a
+  self-describing filesystem artifact (native XGBoost JSON + a metadata
+  sidecar recording feature-column order, training window, and
+  validation metrics — there's no "trained model" table in the required
+  schema, so this is the standard alternative). `compute_and_store_ml_predictions`
+  loads it once per batch and writes `ml_probability` onto
+  `model_predictions`, merging into the same row Phase 5's Poisson
+  prediction already wrote to (same `DEFAULT_MODEL_VERSION` mechanism).
+- `backend/app/models/ml_cli.py` — `python -m app.models.ml_cli train
+  --train-start ... --train-end ... --val-end ...` and `... predict
+  --start ... --end ...`.
+- Added `pandas`, `numpy`, `scikit-learn`, `xgboost` to `requirements.txt`.
+  Trained model artifacts (`backend/artifacts/`) are git-ignored — any
+  model trained in this sandbox would only reflect synthetic test data,
+  so committing one would be actively misleading; operators train their
+  own after real historical ingestion.
+
+**Tests** (`backend/tests/`, 171 total — 25 new, all passing)
+
+- `test_chronological_split.py` (pure): correct partitioning by cutoff,
+  no overlap/gaps, rows sorted (never left in arbitrary/random order)
+  within each partition, boundary dates resolve to the right side.
+- `test_xgboost_model.py` (real XGBoost training on synthetic data, no
+  DB): **the model actually learns** — trained on a feature that
+  near-perfectly determines the label, it predicts confidently and
+  correctly on clear cases (not just "runs without crashing"); missing
+  values don't crash prediction; save/load round-trips to identical
+  predictions.
+- `test_ml_dataset.py` (real PostgreSQL): only finished fixtures with
+  computed features are included; column prefixing is correct with no
+  raw/unprefixed or ORM-bookkeeping columns leaking through; date-range
+  and chronological-ordering correctness; an upcoming fixture still gets
+  a feature row (no target key) for prediction.
+- `test_ml_service.py` (real PostgreSQL + a real small training run):
+  end-to-end train → save artifact → load → predict, using a synthetic
+  but genuinely learnable relationship seeded into `team_features`;
+  empty training window raises clearly; predicting with no trained
+  artifact raises clearly (not a silent wrong answer); a prediction
+  merges into an existing Poisson row without clobbering it; a fixture
+  missing features is skipped and recorded as a batch failure.
+
+**Remaining risks**
+
+- No hyperparameter tuning has been done — `DEFAULT_PARAMS` in
+  `xgboost_model.py` are reasonable, conservative defaults (shallow
+  trees, low learning rate, subsampling), not the product of a search.
+  Phase 7's backtesting is what should inform whether they need
+  revisiting.
+- Feature quality is bounded by Phase 4/3 as already noted: box-score
+  stats/xG are `None` everywhere until real Sportmonks type IDs are
+  configured, so in practice the model currently trains on goals-based
+  features only.
+- No real historical data has been ingested in this session (no live
+  Sportmonks token), so no real model has actually been trained —
+  everything above is verified against synthetic data with a known,
+  controlled relationship to the label.
 
 See `docs/SETUP.md` for environment setup instructions and
 `docs/DATABASE.md` for the full schema reference.

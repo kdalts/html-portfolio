@@ -30,12 +30,9 @@ from app.db.models.fixtures import Fixture
 from app.models import repository
 from app.models.constants import DEFAULT_MODEL_VERSION
 from app.models.poisson import DEFAULT_WINDOW, estimate_poisson
+from app.models.utils import row_to_dict
 
 logger = logging.getLogger(__name__)
-
-
-def _row_to_dict(row) -> dict:
-    return {c.name: getattr(row, c.name) for c in row.__table__.columns}
 
 
 def compute_poisson_prediction_for_fixture(
@@ -66,7 +63,7 @@ def compute_poisson_prediction_for_fixture(
         return None
 
     estimate = estimate_poisson(
-        _row_to_dict(home_features), _row_to_dict(away_features), _row_to_dict(match_features), window=window
+        row_to_dict(home_features), row_to_dict(away_features), row_to_dict(match_features), window=window
     )
     if estimate is None:
         return None
