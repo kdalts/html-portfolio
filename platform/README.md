@@ -21,7 +21,8 @@ to production).
 platform/
   backend/     FastAPI + PostgreSQL + SQLAlchemy + Pandas/NumPy + XGBoost
   frontend/    Next.js + React + TypeScript + Tailwind CSS (Phase 12)
-  docs/        (this file + SETUP/DATABASE/API/MODEL/BACKTEST/DEPLOYMENT)
+  automation/  n8n workflow template (Phase 13)
+  docs/        SETUP/DATABASE/API/MODEL/BACKTEST/DEPLOYMENT
 ```
 
 ## Build phases
@@ -43,7 +44,7 @@ before the next begins.
 | 10 | Odds and market edge | **Done** |
 | 11 | Ranking engine | **Done** |
 | 12 | Dashboard (Next.js) | **Done** |
-| 13 | Automation (n8n) | Not started |
+| 13 | Automation (n8n) | **Done** |
 
 ## Phase 1 — Sportmonks connection
 
@@ -929,7 +930,141 @@ no data) and the 404 state (an unknown fixture id). See
   charts (e.g. a calibration plot) beyond the probability-band table;
   reasonable for a first pass, a candidate for follow-up.
 
+## Phase 13 — Automation (n8n)
+
+Ties every previous phase's CLI into one daily run: the spec's twelve
+AUTOMATION steps, executed in order, with per-step failure isolation.
+
+**What was built**
+
+- `backend/app/automation/daily_pipeline.py` — `run_daily_pipeline`
+  fetches the target date's upcoming (`NS`) fixtures and then runs, in
+  order: fixture retrieval, Sportmonks prediction retrieval, feature
+  computation, Poisson/ML/Sportmonks-sync/ensemble-and-calibration
+  prediction generation, odds retrieval, market probability sync, ranking
+  (which computes confidence and stores the Top N in one call), and the
+  daily report. Each step is wrapped individually — one step's exception
+  (most commonly: no trained ML artifact yet) is caught, logged, and
+  recorded in the returned `DailyPipelineReport` as a failed `StepResult`
+  without stopping the rest of the run, the same failure-isolation
+  philosophy every batch operation in this codebase already follows.
+  Steps that don't correspond to a separate action in this codebase's data
+  model — "calculate edge" (a Phase 2 generated column) and "calculate
+  confidence"/"store the Top 10" (both internal to Phase 11's
+  `build_daily_ranking`) — are still recorded in the report, with a detail
+  string pointing at where the real work actually happens, rather than
+  fabricating a no-op action for them.
+- Model training (Phase 6), backtesting (Phase 7), and league-reliability
+  scoring (Phase 11) are **deliberately not** part of this daily pipeline
+  — they're periodic/on-demand jobs (see `docs/DEPLOYMENT.md`), not
+  something that needs to re-run every day. The pipeline assumes a
+  trained ML artifact, a fitted ensemble/calibration config, and at least
+  one `league_model_performance` computation already exist; if any are
+  missing, the corresponding step fails cleanly with a clear reason
+  rather than crashing the run.
+- `backend/app/automation/report.py` — `generate_daily_report` builds a
+  human-readable summary of the day's ranked selections (each with
+  probability, confidence, and edge shown as the separate figures they
+  are, plus the platform's standing "not guarantees" disclaimer) or a
+  clear "no qualifying selections today" message. `send_report` delivers
+  it via a generic webhook POST (`DAILY_REPORT_WEBHOOK_URL`) rather than a
+  specific vendor integration — no credentials for any one provider
+  (email, Slack, ...) were available to build and test against, and a
+  JSON webhook is what every mainstream chat/email-relay tool already
+  knows how to receive (Slack incoming webhooks, Discord, n8n's own
+  Webhook node, Zapier, ...). If no URL is configured, the report is
+  logged instead — a safe, functional default that never silently drops
+  it, and delivery failure falls back to logging rather than raising.
+- `backend/app/automation/cli.py` — `python -m app.automation.cli run
+  [--date YYYY-MM-DD]`, the single command a scheduler needs to invoke.
+  Exits `0` if every step succeeded, `1` otherwise, logging each step's
+  status and detail.
+- `platform/automation/n8n-daily-pipeline.json` — an importable n8n
+  workflow: a daily Schedule Trigger, an Execute Command node running the
+  CLI above, and a failure branch that posts an alert to a separate
+  ops-facing webhook. `docs/DEPLOYMENT.md` covers importing and adapting
+  it, plus the plain-cron alternative.
+- `docs/DEPLOYMENT.md` — the platform's deployment guide: database
+  (Supabase/any PostgreSQL), backend API hosting, the Vercel frontend
+  deploy, and scheduling the daily pipeline (n8n or cron), plus which
+  jobs stay manual/periodic by design.
+
+**A real, important bug this phase's tests caught:** every sub-service
+this pipeline calls (`ingest_fixtures_between`,
+`compute_and_store_features_for_fixtures`,
+`compute_and_store_poisson_predictions`, etc.) commits its own work by
+default (`commit=True`) — correct for a real scheduled run, where partial
+progress should persist even if a later step fails. But it silently broke
+the test suite's `db_session` fixture, which relies on an outer
+connection-level transaction rolled back at teardown for isolation:
+calling `session.commit()` on that fixture's session commits the
+underlying transaction for real, and the rollback at teardown becomes a
+no-op. Running the pipeline's integration test once permanently wrote a
+mocked test league into the shared `football_platform_test` database,
+which then collided with a later test's own seed data
+(`UniqueViolation` on `leagues.id`). Fixed by threading a `commit: bool =
+True` parameter through `run_daily_pipeline` into every sub-service call
+(all of which already supported it individually) and into the pipeline's
+own two manual `session.commit()` calls, so tests can pass `commit=False`
+and preserve the fixture's rollback-based isolation while production
+usage keeps the desirable default. The polluted rows were cleaned up
+directly in the test database, and the tests were also fixed to `flush()`
+their own seed data rather than `commit()` it, for the same reason.
+
+**Tests** (`backend/tests/`, 297 total — 17 new, all passing)
+
+- `test_automation_report.py` — report text includes the right teams,
+  league, probability/confidence/edge figures, and the "not a guarantee"
+  disclaimer; a date with no ranking produces a clear empty-state message
+  instead of an empty report; `send_report` logs (and returns `False`)
+  with no webhook configured, posts to a configured webhook and returns
+  `True`, and falls back to logging (returning `False`, not raising) when
+  delivery fails.
+- `test_daily_pipeline.py` (real PostgreSQL, mocked Sportmonks HTTP) —
+  every one of the fifteen recorded steps runs in the documented order;
+  missing prerequisites (no trained ML artifact / ensemble config) are
+  isolated failures that don't stop the rest of the run, and the fixture
+  itself is still ingested despite them; given seeded history and
+  pre-trained artifacts, a full run produces an actual stored
+  `DailyRanking` and a `ModelPrediction` row with every probability source
+  populated and a positive Poisson ensemble weight — proving the
+  orchestration and data flow work end to end, not just that each step
+  runs in isolation.
+
+Run them yourself (requires a local PostgreSQL instance):
+
+```bash
+cd platform/backend
+export TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/football_platform_test
+python3 -m pytest -v
+```
+
+**Remaining risks**
+
+- No real scheduler (n8n or cron) has actually executed this pipeline
+  against a live deployment in this session — the workflow template and
+  `docs/DEPLOYMENT.md` follow n8n's and cron's documented conventions but
+  are unverified against a running instance.
+- No `DAILY_REPORT_WEBHOOK_URL` provider has been exercised against a
+  real endpoint (Slack/Discord/...) — `send_report`'s POST is a generic
+  `{"text": ...}` JSON body, which Slack/n8n-style incoming webhooks
+  accept directly, but a provider requiring a different payload shape
+  would need a small adapter.
+- Same as every phase relying on live ingestion (3/9/10): no real
+  Sportmonks token has been used in this session, so the pipeline's
+  Sportmonks-prediction and odds-retrieval steps are verified only
+  against mocked HTTP responses.
+- This is the last of the thirteen planned phases. The platform as built
+  is functionally complete end to end (ingestion → features → three
+  prediction sources → ensemble/calibration → backtesting →
+  league-reliability-filtered ranking → dashboard → daily automation) but
+  has only ever run against synthetic/seeded data and mocked Sportmonks
+  responses — see "Remaining risks" in Phases 1, 3, 6, 9, 10, and 12 for
+  what a real deployment still needs to verify against a live Sportmonks
+  token and real historical data before going live.
+
 See `docs/SETUP.md` for environment setup instructions, `docs/DATABASE.md`
 for the full schema reference, `docs/BACKTEST.md` for backtesting
-methodology, `docs/MODEL.md` for the full modeling writeup, and
-`docs/API.md` for the read API this dashboard consumes.
+methodology, `docs/MODEL.md` for the full modeling writeup, `docs/API.md`
+for the read API the dashboard consumes, and `docs/DEPLOYMENT.md` for
+running the platform in production.

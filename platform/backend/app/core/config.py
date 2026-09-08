@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     # still the safer default.
     cors_allowed_origins: str = "http://localhost:3000"
 
+    # --- Automation (Phase 13) --------------------------------------------------------
+    # Generic webhook URL the daily report is POSTed to (Slack incoming
+    # webhook, Discord, n8n's own Webhook node, ...) - not a specific
+    # vendor integration, since no provider credentials were available to
+    # build and test against. None (the default) means "log the report
+    # only" - never a silent failure to produce it.
+    daily_report_webhook_url: str | None = None
+
     @field_validator("sportmonks_api_token")
     @classmethod
     def _token_not_blank(cls, value: str) -> str:

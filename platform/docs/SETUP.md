@@ -218,6 +218,23 @@ log output. `daily` builds and stores the Top 10 for a date — requires
 predictions (steps 8/9/11/12/13) and features (step 7) already computed
 for that date's fixtures.
 
+## 15. Run the daily automation pipeline
+
+```bash
+cd platform/backend
+python3 -m app.automation.cli run --date 2024-08-17
+```
+
+Runs every step in `platform/README.md`'s Phase 13 section end to end for
+the given date (defaults to today, UTC): retrieves upcoming fixtures,
+Sportmonks predictions, and odds; computes features and every prediction
+source; ranks and stores the Top N; sends the daily report. One step
+failing (e.g. no trained ML artifact yet) is recorded and does not stop
+the rest of the run — check the logged per-step status. Set
+`DAILY_REPORT_WEBHOOK_URL` to have the report delivered to a webhook
+(Slack/Discord/n8n's own Webhook node/...) instead of only logged. See
+`docs/DEPLOYMENT.md` for scheduling this with n8n or cron in production.
+
 ## Environment variables
 
 | Variable | Required | Default | Purpose |
@@ -232,6 +249,7 @@ for that date's fixtures.
 | `DATABASE_ECHO` | No | `false` | Log all SQL statements |
 | `CORS_ALLOWED_ORIGINS` | No | `http://localhost:3000` | Comma-separated origins allowed to call the read API |
 | `TEST_DATABASE_URL` | No (tests only) | `postgresql+psycopg://postgres:postgres@localhost:5432/football_platform_test` | DB used by `tests/test_db_integration.py` |
+| `DAILY_REPORT_WEBHOOK_URL` | No | unset (report is logged, not delivered) | Webhook URL the daily automation pipeline POSTs the day's report to (Slack incoming webhook, Discord, n8n's own Webhook node, ...) |
 
 Further phases will add more variables, documented here as they are
 introduced.

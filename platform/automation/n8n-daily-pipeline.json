@@ -1,0 +1,123 @@
+{
+  "name": "Football Over 2.5 - Daily Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Daily Schedule (06:00)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "command": "cd /path/to/platform/backend && /path/to/.venv/bin/python -m app.automation.cli run"
+      },
+      "name": "Run Daily Pipeline",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "notes": "Requires DATABASE_URL / SPORTMONKS_API_TOKEN / DAILY_REPORT_WEBHOOK_URL set in the environment this command runs in (n8n's own process env, or an SSH/Docker exec step if the backend is deployed elsewhere)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.exitCode }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Pipeline Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.PIPELINE_ALERT_WEBHOOK_URL }}",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"text\": \"Football Over 2.5 daily pipeline failed - exit code \" + $json.exitCode + \". Check the run's stdout/stderr for the failing step.\" } }}"
+      },
+      "name": "Notify Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 220],
+      "notes": "PIPELINE_ALERT_WEBHOOK_URL is a separate, ops-facing webhook (Slack/Discord/etc.) for pipeline health, distinct from DAILY_REPORT_WEBHOOK_URL which delivers the day's Top N selections regardless of run status."
+    },
+    {
+      "parameters": {},
+      "name": "Pipeline Succeeded (no-op)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [900, 380]
+    }
+  ],
+  "connections": {
+    "Daily Schedule (06:00)": {
+      "main": [
+        [
+          {
+            "node": "Run Daily Pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Daily Pipeline": {
+      "main": [
+        [
+          {
+            "node": "Pipeline Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pipeline Failed?": {
+      "main": [
+        [
+          {
+            "node": "Notify Failure",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Pipeline Succeeded (no-op)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {
+    "instanceId": "football-over-2-5-platform"
+  }
+}
