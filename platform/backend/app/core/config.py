@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     sportmonks_backoff_base_seconds: float = 1.0
     sportmonks_requests_per_minute: int = 60
 
+    # --- Database ------------------------------------------------------------------
+    database_url: str
+    database_echo: bool = False
+
     @field_validator("sportmonks_api_token")
     @classmethod
     def _token_not_blank(cls, value: str) -> str:
@@ -30,6 +34,13 @@ class Settings(BaseSettings):
                 "SPORTMONKS_API_TOKEN must be set (via environment variable or .env) "
                 "and must not be blank."
             )
+        return value
+
+    @field_validator("database_url")
+    @classmethod
+    def _database_url_not_blank(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("DATABASE_URL must be set (via environment variable or .env) and must not be blank.")
         return value
 
 

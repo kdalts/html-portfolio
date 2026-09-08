@@ -1,11 +1,13 @@
 # Setup
 
-This document currently covers Phase 1 (Sportmonks connection) setup. It
-will be extended as later phases add the database, models, and frontend.
+This document covers Phase 1 (Sportmonks connection) and Phase 2
+(database) setup. It will be extended as later phases add models and the
+frontend.
 
 ## Prerequisites
 
 - Python 3.11+
+- PostgreSQL 14+ (16 recommended — generated/STORED columns require PG 12+)
 - A Sportmonks Football API account and token
   (https://www.sportmonks.com/football-api/)
 
@@ -36,17 +38,39 @@ SPORTMONKS_API_TOKEN=your-real-token-here
 All configuration is read from the environment via
 `app/core/config.py:Settings`; nothing is hard-coded in source.
 
-## 3. Run the tests
+## 3. Create the databases and apply migrations
+
+```bash
+# create an app database and a separate test database
+createdb football_platform
+createdb football_platform_test
+
+# set DATABASE_URL in .env, e.g.:
+# DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/football_platform
+
+cd platform/backend
+export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/football_platform
+alembic upgrade head
+
+export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/football_platform_test
+alembic upgrade head
+```
+
+See `docs/DATABASE.md` for the full schema and migration workflow.
+
+## 4. Run the tests
 
 ```bash
 cd platform/backend
+export TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/football_platform_test
 python3 -m pytest -v
 ```
 
-These tests mock all HTTP calls (`httpx.MockTransport`) and do not require
-a real token or network access.
+Sportmonks HTTP calls are mocked (`httpx.MockTransport`) — no real token or
+network access needed. Database tests run against a real PostgreSQL
+database (`TEST_DATABASE_URL`) and skip cleanly if one isn't reachable.
 
-## 4. Run the API locally
+## 5. Run the API locally
 
 ```bash
 cd platform/backend
@@ -60,7 +84,7 @@ Then check:
   if `SPORTMONKS_API_TOKEN` is set and valid, or a `502`/`503` with a
   descriptive error otherwise.
 
-## Environment variables (Phase 1)
+## Environment variables
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
@@ -70,6 +94,9 @@ Then check:
 | `SPORTMONKS_MAX_RETRIES` | No | `5` | Retries for transient failures |
 | `SPORTMONKS_BACKOFF_BASE_SECONDS` | No | `1.0` | Base for exponential backoff |
 | `SPORTMONKS_REQUESTS_PER_MINUTE` | No | `60` | Client-side throttle budget |
+| `DATABASE_URL` | Yes | — | PostgreSQL connection string (app + Alembic) |
+| `DATABASE_ECHO` | No | `false` | Log all SQL statements |
+| `TEST_DATABASE_URL` | No (tests only) | `postgresql+psycopg://postgres:postgres@localhost:5432/football_platform_test` | DB used by `tests/test_db_integration.py` |
 
-Further phases will add `DATABASE_URL` and other variables, documented
-here as they are introduced.
+Further phases will add more variables, documented here as they are
+introduced.

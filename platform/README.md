@@ -32,7 +32,7 @@ before the next begins.
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Sportmonks API connection | **Done** |
-| 2 | Database schema | Not started |
+| 2 | Database schema | **Done** |
 | 3 | Historical data ingestion | Not started |
 | 4 | Feature engineering | Not started |
 | 5 | Poisson baseline model | Not started |
@@ -112,4 +112,86 @@ python3 -m pytest -v
 - No database, models, or endpoints beyond health checks exist yet — by
   design, per the phased build plan.
 
-See `docs/SETUP.md` for environment setup instructions.
+## Phase 2 — Database schema
+
+**What was built**
+
+- All 14 required tables (`leagues`, `teams`, `seasons`, `fixtures`,
+  `match_statistics`, `match_xg`, `sportmonks_predictions`, `odds`,
+  `team_features`, `match_features`, `model_predictions`,
+  `backtest_results`, `league_model_performance`, `daily_rankings`) as
+  SQLAlchemy 2.0 models under `backend/app/db/models/`, every one with a
+  primary key, foreign keys with deliberate delete semantics (RESTRICT for
+  reference data, CASCADE for anything derived from a fixture), indexes,
+  and `created_at`/`updated_at` timestamps.
+- `fixtures.total_goals` and `fixtures.over_2_5` are PostgreSQL
+  `GENERATED ALWAYS AS ... STORED` columns computed only from
+  `home_goals`/`away_goals` — the Over 2.5 target label is enforced by the
+  database itself and cannot drift from `home_goals + away_goals >= 3`, and
+  is `NULL` for any unfinished fixture. `odds`' implied probabilities, its
+  de-vigged `market_probability`, and `model_predictions.edge`
+  (`final_probability - market_probability`) are generated columns for the
+  same reason: derived values can't disagree with their inputs.
+- `team_features` (rolling pre-match form per team per fixture, in both
+  "overall" and venue-specific variants, for 3/5/10-match windows across
+  10 stats) is built programmatically — 66 columns generated from a
+  `(stat x window x context)` spec rather than hand-typed, with a matching
+  test that verifies completeness.
+- Alembic is configured (`backend/alembic/`) with the connection string
+  injected from `Settings`/`DATABASE_URL` at runtime — never hard-coded in
+  `alembic.ini`. The initial migration was generated, applied to a real
+  local PostgreSQL 16 database, verified reversible (`downgrade base` then
+  `upgrade head` recreates all 15 tables including `alembic_version`), and
+  `alembic check` confirms the models and migration are in sync.
+- Full schema documentation: `docs/DATABASE.md`.
+
+**Tests** (`backend/tests/`, 47 tests total — 32 new in this phase, all passing)
+
+- `test_db_schema.py` (structural, no DB required): all 14 required tables
+  present and no extras; every table has a primary key and timestamps;
+  cascade-vs-restrict FK rules match the intended data lifecycle;
+  `team_features`' generated column set is complete; `model_predictions`
+  genuinely keeps probability, confidence, and edge as distinct columns.
+- `test_db_integration.py` (against a real local PostgreSQL database,
+  skips cleanly if unreachable): the Over 2.5 label is verified correct
+  for every goal combination tested, including that a fixture with only
+  one final score recorded resolves to `NULL`, never a false 0/1; CHECK
+  constraints reject invalid status, negative goals, and same-team
+  fixtures; FK constraints reject a fixture referencing a nonexistent
+  league; unique constraints reject duplicate `team_features` rows and
+  duplicate ranks on the same day; the `odds` de-vig math and
+  `model_predictions.edge` generated columns are checked against
+  independently computed expected values; deleting a fixture cascades to
+  its `match_statistics` row; deleting a team referenced by a fixture is
+  correctly blocked.
+
+Run them yourself (requires a local PostgreSQL instance):
+
+```bash
+cd platform/backend
+createdb football_platform_test
+export TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/football_platform_test
+python3 -m pytest -v
+```
+
+**Remaining risks / open items for later phases**
+
+- The schema was designed from the spec's table list and column
+  requirements, not from real Sportmonks payloads — field names/shapes
+  should be cross-checked against real API responses during Phase 3
+  (ingestion), and the schema may need minor adjustment then.
+- The pre-kickoff leakage guard for `sportmonks_predictions.retrieved_at`,
+  `odds.retrieved_at`, and `model_predictions.predicted_at` is documented
+  but *not* enforced by a database constraint (Postgres CHECK constraints
+  can't reference another table). It must be enforced in application code
+  from Phase 3 onward and is a prime candidate for its own leakage-guard
+  tests, as the spec requires.
+- `team_features`/`match_features` schemas encode this phase's judgment
+  call about which rolling stats and windows matter; Phase 4 (feature
+  engineering) may reveal a need to add columns (a new migration), not
+  redesign the table shape.
+- No seed/reference data has been loaded yet — tables are empty until
+  Phase 3.
+
+See `docs/SETUP.md` for environment setup instructions and
+`docs/DATABASE.md` for the full schema reference.
