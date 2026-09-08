@@ -136,6 +136,18 @@ Training only uses fixtures with a known result and computed features
 artifact and writes `ml_probability` onto `model_predictions`, merging
 into the same row Poisson wrote to.
 
+## 10. Run a walk-forward backtest
+
+```bash
+cd platform/backend
+python3 -m app.backtest.cli run
+```
+
+Writes `backtest_results` rows for the expanding-window folds described
+in `docs/BACKTEST.md`. Each fold trains its own ML artifact (under
+`backend/artifacts/xgboost/backtest/`) using only that fold's training
+window — never the shared "production" `v1` model.
+
 ## Environment variables
 
 | Variable | Required | Default | Purpose |

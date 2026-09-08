@@ -37,7 +37,7 @@ before the next begins.
 | 4 | Feature engineering | **Done** |
 | 5 | Poisson baseline model | **Done** |
 | 6 | XGBoost model | **Done** |
-| 7 | Backtesting (walk-forward) | Not started |
+| 7 | Backtesting (walk-forward) | **Done** |
 | 8 | Probability calibration | Not started |
 | 9 | Sportmonks model integration | Not started |
 | 10 | Odds and market edge | Not started |
@@ -567,5 +567,51 @@ python3 -m pytest -v
   everything above is verified against synthetic data with a known,
   controlled relationship to the label.
 
-See `docs/SETUP.md` for environment setup instructions and
-`docs/DATABASE.md` for the full schema reference.
+## Phase 7 — Backtesting (walk-forward)
+
+**What was built** — see `docs/BACKTEST.md` for the full design writeup
+(methodology, metric definitions, the home/away segment's interpretation).
+Summary:
+
+- `backend/app/backtest/metrics.py` — Log Loss, Brier Score, ROC-AUC,
+  Accuracy, Precision, Recall, a probability-band-based Calibration
+  Error, and Hit Rate (deliberately distinct from Precision — see
+  `docs/BACKTEST.md`). Every function returns `None`, never a fabricated
+  number, when undefined (zero samples, single class).
+- `backend/app/backtest/probability_bands.py` — bins a probability into
+  the schema's `PROBABILITY_BANDS` (imported, not redefined).
+- `backend/app/backtest/segments.py` — turns per-fixture evaluation rows
+  into `backtest_results` rows sliced by league, season, probability
+  band, and home/away, plus an overall row; empty segments are omitted.
+- `backend/app/backtest/walkforward.py` — the expanding-window folds from
+  the spec's own example (train 2019–2022→test 2023, 2019–2023→test 2024,
+  2019–2024→test 2025). Poisson needs no retraining per fold (Phase 4's
+  features are already leakage-safe); **ML trains a fresh model per fold
+  using only that fold's own training window**, proven directly by a test
+  that reads the saved artifact's metadata and confirms its training
+  cutoff never reaches the fold's test period.
+- `backend/app/backtest/cli.py` — `python -m app.backtest.cli run`.
+
+**Tests** (`backend/tests/`, 208 total — 37 new, all passing)
+
+- `test_backtest_metrics.py` / `test_probability_bands.py` /
+  `test_backtest_segments.py` (pure): every metric against a
+  hand-computed value; zero-division handled cleanly (0.0, not a
+  warning/NaN); Hit Rate proven numerically distinct from Precision;
+  band boundaries; segment grouping and omission-when-empty.
+- `test_backtest_walkforward.py` (real PostgreSQL + real per-fold
+  training): results written for every configured model_type and every
+  segment type; **the central leakage guarantee — the ML artifact's own
+  metadata proves its training window never reaches the fold's test
+  period**; idempotent re-run; an empty fold produces no rows without
+  erroring.
+
+**Remaining risks** — no real historical data ingested yet, so no real
+backtest has actually been run; `sportmonks`/`raw_ensemble`/`final`
+model_types aren't evaluated here (they don't exist until Phases 8–9) but
+`run_walkforward_backtest`'s `model_types` parameter is built to extend
+to them without changes to this phase's code.
+
+See `docs/SETUP.md` for environment setup instructions, `docs/DATABASE.md`
+for the full schema reference, and `docs/BACKTEST.md` for backtesting
+methodology.
