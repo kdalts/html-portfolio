@@ -111,6 +111,17 @@ features for the daily ranking just as much as historical ones need them
 for training. Safe to re-run (idempotent). See `platform/README.md`'s
 Phase 4 section for how the leakage boundary is enforced.
 
+## 8. Generate Poisson baseline predictions
+
+```bash
+cd platform/backend
+python3 -m app.models.poisson_cli build --start 2019-08-01 --end 2025-08-01
+```
+
+Requires features to already be computed for those fixtures (step 7).
+Writes `expected_home_goals`/`expected_away_goals`/`poisson_probability`
+onto `model_predictions`. Safe to re-run.
+
 ## Environment variables
 
 | Variable | Required | Default | Purpose |

@@ -35,7 +35,7 @@ before the next begins.
 | 2 | Database schema | **Done** |
 | 3 | Historical data ingestion | **Done** |
 | 4 | Feature engineering | **Done** |
-| 5 | Poisson baseline model | Not started |
+| 5 | Poisson baseline model | **Done** |
 | 6 | XGBoost model | Not started |
 | 7 | Backtesting (walk-forward) | Not started |
 | 8 | Probability calibration | Not started |
@@ -415,6 +415,75 @@ python3 -m pytest -v
 - `fetch_team_appearances` loads a team's entire history unbounded (no
   pagination/limit) — correct, but a known scaling consideration for
   leagues with many years of data once ingestion volume grows.
+
+## Phase 5 — Poisson baseline model
+
+**What was built**
+
+- `backend/app/models/poisson.py` — pure math, no DB: the classic
+  independent-Poisson attack/defense-strength model.
+  `expected_home_goals`/`expected_away_goals` are derived from each
+  team's venue-specific scoring/conceding rate (Phase 4's
+  `venue_last{W}_goals_scored`/`_conceded`, falling back to
+  `overall_last{W}_*` if a team has no venue-specific history yet)
+  normalized against the league's home/away goal averages
+  (`match_features.league_home_goals_avg`/`league_away_goals_avg`). The
+  module docstring spells out, explicitly, which league average each
+  defense ratio normalizes against — `away_defense` against `mu_home`,
+  `home_defense` against `mu_away` — because a team's away-conceded
+  total is drawn from the same league-wide distribution as home teams'
+  scoring, not away teams'. Getting this backwards is a classic bug in
+  these models, and `test_estimate_poisson_defense_normalized_against_opposite_league_average`
+  exists specifically to catch it via deliberately asymmetric inputs.
+  `poisson_over_2_5_probability(lambda_total)` is `1 - exp(-λ)(1+λ+λ²/2)`,
+  i.e. `P(X>=3)` for `X ~ Poisson(λ_total)` — valid because the sum of two
+  independent Poisson variables is itself Poisson with the summed rate.
+  Returns `None` (never a fabricated number) whenever the league baseline
+  or a team's goal rate isn't available.
+- `backend/app/models/poisson_service.py` — reads a fixture's
+  `team_features`/`match_features` rows, computes the estimate, and
+  upserts `expected_home_goals`/`expected_away_goals`/`poisson_probability`
+  onto `model_predictions`. **Deliberately does not apply the
+  ensure_not_leaked guard** used for `sportmonks_predictions`/`odds` —
+  documented in the module docstring: this model's only inputs are
+  Phase 4 features, which already guarantee pre-kickoff-only data by
+  construction, so running the computation today for a 2020 fixture
+  yields the exact same number a genuine 2020 pre-match run would have.
+  `predicted_at` records when the computation ran, not a claim about data
+  availability.
+- Every phase from here on writing to `model_predictions` shares one
+  `model_version` (`app/models/constants.py:DEFAULT_MODEL_VERSION`), so
+  Poisson/ML/ensemble/calibration all land on the *same* row per fixture
+  instead of each creating their own — verified by a test that seeds an
+  `ml_probability` on a row and confirms the Poisson upsert fills in
+  `poisson_probability` alongside it without touching the existing value.
+- `backend/app/models/poisson_cli.py` — `python -m app.models.poisson_cli
+  build --start ... --end ...`.
+
+**Tests** (`backend/tests/`, 146 total — 20 new, all passing)
+
+- `test_poisson_model.py` (pure): the Poisson CDF formula against a
+  textbook reference value (λ=2 → P(Over 2.5) ≈ 0.323324); monotonicity;
+  bounds; negative-λ rejection; the attack/defense formula against
+  hand-calculated expected goals; the defense-normalization regression
+  guard described above; venue→overall fallback; `None` returned for
+  missing/zero league averages and for a team with no history at all;
+  window parameter correctness.
+- `test_poisson_service.py` (real PostgreSQL): correct end-to-end values
+  from seeded features; `None`/skipped when features aren't computed yet;
+  the batch driver persists, is idempotent, and merges into (never
+  clobbers) a `model_predictions` row another phase already wrote to;
+  one fixture missing features doesn't abort the batch.
+
+**Remaining risks**
+
+- Accuracy is only as good as Phase 4's rolling stats, which are
+  currently goals-only in practice (box-score stats/xG await Phase 3's
+  placeholder type IDs) — the Poisson model as built only needs goals
+  data, so it's unaffected, but it means this baseline can't yet be
+  cross-checked against an xG-based expected-goals sanity check.
+  `window` defaults to 10 matches; no tuning of window size against
+  held-out data has been done yet — that's what Phase 7 backtesting is for.
 
 See `docs/SETUP.md` for environment setup instructions and
 `docs/DATABASE.md` for the full schema reference.
