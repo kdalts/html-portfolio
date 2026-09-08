@@ -41,7 +41,7 @@ before the next begins.
 | 8 | Ensemble + probability calibration | **Done** |
 | 9 | Sportmonks model integration | **Done** |
 | 10 | Odds and market edge | **Done** |
-| 11 | Ranking engine | Not started |
+| 11 | Ranking engine | **Done** |
 | 12 | Dashboard (Next.js) | Not started |
 | 13 | Automation (n8n) | Not started |
 
@@ -784,6 +784,84 @@ in this session (no live Sportmonks token, and `ODDS_MARKET_ID_OVER_UNDER`
 in `sportmonks_reference.py` is still a placeholder). The overround
 plausibility bounds (1.0–1.30) are a reasonable default, not tuned
 against real market data.
+
+## Phase 11 — Ranking engine
+
+Ties everything together: league filtering, `confidence_score`,
+`ranking_score`, and the daily Top N.
+
+**What was built**
+
+- `backend/app/ranking/league_reliability.py` — `league_reliability_score`
+  is a **multiplicative** combination of sample-size adequacy × Brier
+  quality × calibration quality (all in `[0,1]`), sample-size-weighted
+  across whichever `backtest_run_ids` are supplied (typically every fold
+  of one walk-forward execution, so the score reflects the whole tested
+  history). Multiplicative, not averaged, on purpose — a league with
+  plenty of samples but badly miscalibrated predictions must not average
+  out to a middling score; any one weak dimension pulls the whole score
+  down, which `test_multiplicative_combination_is_stricter_than_averaging`
+  proves directly. A league is `is_eligible` only above both a score
+  threshold and a minimum sample size.
+- `backend/app/ranking/confidence.py` — `confidence_score` (the
+  platform's explicitly required third quantity, distinct from
+  probability and edge) = `data_completeness × league_reliability ×
+  model_agreement`. Model agreement drops as the available probability
+  sources (poisson/ml/sportmonks) disagree more; with only one source to
+  begin with, agreement is a fixed, documented default rather than either
+  extreme.
+- `backend/app/ranking/scoring.py` — `ranking_score` is confidence-weighted
+  probability, plus a **confidence-gated** boost for positive edge only.
+  Negative or absent edge never penalizes a fixture, and a large edge
+  from a low-confidence prediction contributes little — the concrete
+  enforcement of "do not call a selection a value bet solely because the
+  model disagrees with the market."
+- `backend/app/ranking/daily_ranking_service.py` — `build_daily_ranking`
+  fetches a date's not-started fixtures, excludes any with no stored
+  prediction, no features, an ineligible league, or confidence below a
+  floor, ranks what's left by `ranking_score`, and stores the top N.
+  Written delete-then-insert per `ranking_date` (documented in the module
+  docstring) rather than upserted, since which fixtures qualify — and
+  their ranks — can change run to run; there's no stable per-row key to
+  upsert against.
+- `backend/app/ranking/cli.py` — `python -m app.ranking.cli
+  league-reliability` and `... daily --date ...`.
+
+**Tests** (`backend/tests/`, 280 total — 32 new, all passing)
+
+- `test_league_reliability.py` / `test_confidence_and_scoring.py` (pure):
+  every scoring formula against hand-reasoned cases — zero sample size,
+  perfect metrics at full sample, proportional sample-size scaling, a
+  poor Brier or calibration score tanking an otherwise-good score, the
+  multiplicative-vs-averaging regression guard, confidence provably
+  distinct from probability with identical inputs otherwise, positive
+  edge boosting `ranking_score` while negative edge never penalizes it,
+  and the edge boost being smaller at lower confidence.
+- `test_league_reliability_service.py` / `test_daily_ranking_service.py`
+  (real PostgreSQL): aggregation across multiple backtest runs;
+  low-sample leagues correctly ineligible; re-running updates in place;
+  **the full exclusion pipeline** — an ineligible league, a fixture
+  missing a prediction, and a fixture with data too thin to be confident
+  are each excluded with a clear, distinct reason string; qualifying
+  fixtures rank highest-`ranking_score`-first; `top_n` is respected;
+  re-running the same date clears the prior ranking rather than
+  duplicating; only not-started fixtures on the target date are
+  considered.
+
+**Remaining risks**
+
+- Phase 7's walk-forward loop only backtests `poisson`/`ml` by default —
+  extending it to backtest the fully-calibrated `'final'` model per fold
+  (each needing its own ensemble-fitting validation carve-out) is a
+  larger, separate piece of work, flagged rather than built here.
+  `league-reliability`'s `--model-type` is deliberately caller-specified
+  so operators can point it at whichever model_type they've actually
+  backtested in the meantime.
+- Every threshold here (`MIN_RELIABLE_SAMPLE_SIZE`, `MAX_ACCEPTABLE_BRIER`,
+  `ELIGIBILITY_SCORE_THRESHOLD`, `DEFAULT_MIN_CONFIDENCE`,
+  `EDGE_BOOST_WEIGHT`, …) is a reasonable, documented default — none has
+  been tuned against real outcomes, since no real historical data has
+  been backtested in this session.
 
 See `docs/SETUP.md` for environment setup instructions, `docs/DATABASE.md`
 for the full schema reference, `docs/BACKTEST.md` for backtesting

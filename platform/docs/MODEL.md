@@ -160,5 +160,6 @@ or able to overwrite, the "production" `v1` row.
 - Hyperparameters (XGBoost's `DEFAULT_PARAMS`, the ensemble's coverage
   threshold, calibration's minimum-validation-rows cutoff) are reasonable
   defaults, not the product of tuning against real outcomes.
-- `confidence_score` (distinct from probability, per the platform's core
-  rule) is not computed by this phase — that's Phase 11 (ranking engine).
+- `confidence_score` and `ranking_score` are computed by Phase 11
+  (`app/ranking/`), not here — see `platform/README.md`'s Phase 11
+  section for the formulas.

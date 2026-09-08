@@ -187,6 +187,23 @@ odds ingestion) and writes `market_probability`/`market_odds_over`/
 `market_odds_under` onto `model_predictions` — `edge` then follows
 automatically as a generated column once `final_probability` is also set.
 
+## 14. Compute league reliability and the daily ranking
+
+```bash
+cd platform/backend
+python3 -m app.ranking.cli league-reliability \
+  --run-ids wf-2026-2023,wf-2026-2024,wf-2026-2025 --model-type poisson \
+  --window-start 2019-01-01 --window-end 2025-01-01
+
+python3 -m app.ranking.cli daily --date 2024-08-17 --reliability-model-type poisson
+```
+
+`league-reliability` aggregates step 10's `backtest_results` into
+`league_model_performance`; use the `backtest_run_ids` from that run's
+log output. `daily` builds and stores the Top 10 for a date — requires
+predictions (steps 8/9/11/12/13) and features (step 7) already computed
+for that date's fixtures.
+
 ## Environment variables
 
 | Variable | Required | Default | Purpose |
