@@ -163,6 +163,18 @@ under `backend/artifacts/ensemble/`. `apply` writes
 `raw_ensemble_probability`/`final_probability` onto `model_predictions`
 for fixtures in range, merging into the existing row.
 
+## 12. Sync Sportmonks predictions
+
+```bash
+cd platform/backend
+python3 -m app.models.sportmonks_cli sync --start 2024-08-01 --end 2024-09-01
+```
+
+Copies each fixture's already-ingested `sportmonks_predictions.over_2_5_probability`
+(from step 6's ingestion, near-kickoff use case) onto
+`model_predictions.sportmonks_probability`. Run this before step 11's
+`fit` so the ensemble can see it.
+
 ## Environment variables
 
 | Variable | Required | Default | Purpose |

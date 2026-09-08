@@ -39,7 +39,7 @@ before the next begins.
 | 6 | XGBoost model | **Done** |
 | 7 | Backtesting (walk-forward) | **Done** |
 | 8 | Ensemble + probability calibration | **Done** |
-| 9 | Sportmonks model integration | Not started |
+| 9 | Sportmonks model integration | **Done** |
 | 10 | Odds and market edge | Not started |
 | 11 | Ranking engine | Not started |
 | 12 | Dashboard (Next.js) | Not started |
@@ -691,7 +691,50 @@ shouldn't change "when this fixture's prediction was generated").
   tuned against real outcomes — there is no real historical data in this
   session to tune them against.
 
+## Phase 9 — Sportmonks model integration
+
+The heavy lifting was already done in Phase 3: `ingest_prediction_for_fixture`
+retrieves and stores Sportmonks' own Over 2.5 probability in
+`sportmonks_predictions`, enforcing the leakage guard
+(`retrieved_at < kickoff`) at ingestion time. A row only ever exists there
+because it already passed that check — so this phase adds no new leakage
+surface. Phase 9's job is narrower: sync it into the unified
+`model_predictions` row Phase 8's ensemble reads from.
+
+**What was built**
+
+- `backend/app/models/sportmonks_service.py` —
+  `sync_sportmonks_prediction_for_fixture` copies
+  `sportmonks_predictions.over_2_5_probability` onto
+  `model_predictions.sportmonks_probability`, carrying forward the
+  existing row's `predicted_at` (same fix Phase 8 needed — Postgres
+  validates NOT NULL columns against the proposed INSERT row even under
+  `ON CONFLICT DO UPDATE`). `sync_and_store_sportmonks_predictions` is
+  the usual per-item-isolated batch driver.
+- `backend/app/models/sportmonks_cli.py` — `python -m
+  app.models.sportmonks_cli sync --start ... --end ...`.
+- "Sportmonks model-performance information" (spec: "Also store ... where
+  available") — no live token was available to confirm Sportmonks
+  exposes this as a distinct endpoint/field. Rather than guess at a
+  schema for something unverified, it's covered by what Phase 3 already
+  does: `sportmonks_predictions.raw_payload` preserves the full raw
+  response, so nothing is lost; there's simply nothing further to
+  normalize into its own column without a real payload to check against.
+
+**Tests** (`backend/tests/`, 238 total — 7 new, all passing)
+
+`test_sportmonks_service.py` (real PostgreSQL): copies the probability
+correctly; returns `None` with no ingested prediction, or when the
+probability field itself is null (BTTS-only rows, say); preserves an
+existing row's `predicted_at`; the batch driver merges without
+clobbering `poisson_probability`, records a clear failure for a fixture
+with nothing ingested, and is idempotent on re-run.
+
+**Remaining risks** — same as Phase 3: payload shape and the "model
+performance" question above are unverified against a live Sportmonks
+account.
+
 See `docs/SETUP.md` for environment setup instructions, `docs/DATABASE.md`
 for the full schema reference, `docs/BACKTEST.md` for backtesting
 methodology, and `docs/MODEL.md` for the full modeling writeup (Poisson,
-XGBoost, ensemble, calibration together).
+XGBoost, ensemble, calibration, Sportmonks together).
