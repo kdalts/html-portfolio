@@ -1,8 +1,8 @@
 # Setup
 
-This document covers Phase 1 (Sportmonks connection) and Phase 2
-(database) setup. It will be extended as later phases add models and the
-frontend.
+This document covers Phase 1 (Sportmonks connection), Phase 2 (database),
+and Phase 3 (historical ingestion) setup. It will be extended as later
+phases add models and the frontend.
 
 ## Prerequisites
 
@@ -83,6 +83,20 @@ Then check:
 - `GET http://localhost:8000/health/sportmonks` → `{"status": "ok", "provider": "sportmonks"}`
   if `SPORTMONKS_API_TOKEN` is set and valid, or a `502`/`503` with a
   descriptive error otherwise.
+
+## 6. Run historical ingestion
+
+```bash
+cd platform/backend
+python3 -m app.ingestion.cli leagues
+python3 -m app.ingestion.cli fixtures --start 2019-08-01 --end 2019-08-31
+```
+
+Fixture ingestion is safe to re-run (upserts are idempotent) and never
+writes `sportmonks_predictions`/`odds` for historical data — see
+`platform/README.md`'s Phase 3 section for why. Before relying on
+`--with-statistics`, fill in the real Sportmonks `type_id`/`market_id`
+values in `app/ingestion/sportmonks_reference.py` (currently placeholders).
 
 ## Environment variables
 

@@ -33,7 +33,7 @@ before the next begins.
 |---|---|---|
 | 1 | Sportmonks API connection | **Done** |
 | 2 | Database schema | **Done** |
-| 3 | Historical data ingestion | Not started |
+| 3 | Historical data ingestion | **Done** |
 | 4 | Feature engineering | Not started |
 | 5 | Poisson baseline model | Not started |
 | 6 | XGBoost model | Not started |
@@ -192,6 +192,122 @@ python3 -m pytest -v
   redesign the table shape.
 - No seed/reference data has been loaded yet — tables are empty until
   Phase 3.
+
+## Phase 3 — Historical data ingestion
+
+**What was built**
+
+- `backend/app/ingestion/leakage.py` — `ensure_not_leaked(observed_at,
+  kickoff, label=...)`, the single enforcement point for the platform's
+  core leakage rule. Strict: `observed_at` must be *before* (not `<=`)
+  `kickoff`, and both timestamps must be timezone-aware, so a naive
+  datetime can never silently slip through a comparison.
+- `backend/app/ingestion/mappers.py` — pure functions turning raw
+  Sportmonks fixture JSON into the column dicts the schema expects
+  (`map_league`, `map_team`, `map_season`, `map_fixture`,
+  `map_match_statistics`, `map_match_xg`, `map_sportmonks_prediction`,
+  `map_odds`). No I/O; every function takes a dict in and returns a
+  dict/list out, which is what makes them cheap to test exhaustively with
+  canned payloads.
+- `backend/app/ingestion/repository.py` — idempotent
+  `INSERT ... ON CONFLICT DO UPDATE` upserts for every ingested table.
+  Re-running ingestion over the same data never creates duplicates; rows
+  are matched on their natural/unique key and updated in place. The
+  `sportmonks_predictions` and `odds` upserts call `ensure_not_leaked`
+  before writing anything — this is where the guard documented as an
+  application-layer responsibility in Phase 2 actually gets enforced.
+- `backend/app/ingestion/service.py` — orchestration
+  (`ingest_leagues`, `ingest_fixtures_between`,
+  `ingest_prediction_for_fixture`, `ingest_odds_for_fixture`). Each
+  fixture/league is processed inside its own SAVEPOINT
+  (`session.begin_nested()`), so one malformed record is skipped and
+  recorded in the returned `IngestionSummary` (`fetched` / `upserted` /
+  `failed` / `errors`) without rolling back — or blocking — everything
+  else in the same batch.
+- `backend/app/ingestion/cli.py` — a runnable entry point:
+  `python -m app.ingestion.cli leagues` and
+  `python -m app.ingestion.cli fixtures --start ... --end ...`.
+- `backend/app/ingestion/sportmonks_reference.py` — the Sportmonks
+  `type_id`/`market_id` constants needed to interpret statistics,
+  predictions, and odds. **These are placeholders (`None`)** — see
+  "Remaining risks" below.
+
+**A deliberate design decision: historical backfill never touches
+`sportmonks_predictions` or `odds`.** `ingest_fixtures_between` populates
+`leagues`/`teams`/`seasons`/`fixtures` and, optionally, `match_statistics`/
+`match_xg` — all purely factual, post-match data with no leakage
+exposure (they describe what already happened, and are only ever
+consumed later as historical inputs to *future* predictions). Sportmonks'
+own predictions and bookmaker odds are different: for a fixture played
+long ago, there is no way to know whether calling the API for it *today*
+returns values that reflect what was knowable before that fixture's
+kickoff. Rather than guess, bulk historical backfill simply never writes
+to those two tables. `ingest_prediction_for_fixture` /
+`ingest_odds_for_fixture` exist instead for the operational, near-kickoff
+case (to be wired into Phase 13 automation), and every write through them
+passes `ensure_not_leaked`.
+
+**Tests** (`backend/tests/`, 95 tests total — 48 new in this phase, all passing)
+
+- `test_leakage_guard.py` — pure: allows strictly-pre-kickoff timestamps;
+  rejects exactly-at-kickoff, post-kickoff (including the realistic
+  "pulled months after the match" case), naive datetimes on either side,
+  and missing timestamps; checks the error message names both timestamps.
+- `test_ingestion_mappers.py` — pure, canned Sportmonks-shaped JSON:
+  status-code translation and fallback; kickoff parsing (timestamp
+  preferred, string fallback, missing/unparseable rejected); fixture
+  mapping for finished and upcoming matches, and for malformed payloads
+  (missing participants/ids); league/team/season mapping; statistics/xG
+  extraction (including "unconfigured type_id degrades to empty, not an
+  error"); prediction extraction and percent-to-probability conversion;
+  odds Over/Under pairing per bookmaker, line filtering, and incomplete
+  pairs being dropped.
+- `test_ingestion_repository.py` — real PostgreSQL: every upsert is
+  proven idempotent (re-upsert updates in place, never duplicates,
+  including through the fixture's generated `total_goals`/`over_2_5`
+  columns); `sportmonks_predictions`/`odds` upserts succeed pre-kickoff
+  and are refused (with nothing written) post-kickoff.
+- `test_ingestion_service.py` — mocked Sportmonks HTTP (`httpx.MockTransport`,
+  same pattern as Phase 1) against a real database: league/fixture
+  ingestion is idempotent end-to-end; statistics/xG ingestion populates
+  the right rows; **a batch with one malformed fixture still ingests every
+  other fixture in that batch**, with the failure recorded in the
+  summary rather than aborting the run; `ingest_prediction_for_fixture`
+  accepts a pre-kickoff retrieval and rejects a post-kickoff one.
+
+Run them yourself (requires a local PostgreSQL instance):
+
+```bash
+cd platform/backend
+export TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/football_platform_test
+python3 -m pytest -v
+```
+
+**Remaining risks / open items for later phases**
+
+- `sportmonks_reference.py`'s type/market IDs are placeholders
+  (`None`). The mapping *mechanism* is fully implemented and tested
+  against arbitrary IDs, but match_statistics/match_xg/
+  sportmonks_predictions/odds will extract nothing until the real IDs for
+  your Sportmonks subscription are filled in (from its `/core/types` and
+  `/odds/markets` reference endpoints).
+- Payload shape assumptions (documented at the top of `mappers.py`) are
+  standard Sportmonks v3 conventions but still unverified against a live
+  token — same risk flagged in Phase 1/2, now more consequential since
+  ingestion code actively depends on the exact field names.
+  `map_fixture`/`map_league`/etc. raising `MappingError` on an unexpected
+  shape (rather than silently producing wrong data) is the safety net for
+  this until it's checked.
+- "Failed-job tracking" is currently an in-memory `IngestionSummary`
+  (counts + error strings) returned to the caller and logged — not a
+  persisted table (a `job_runs`-style table isn't in the required schema
+  list). For unattended scheduled runs (Phase 13), this summary will need
+  to be captured somewhere durable (log aggregation, or a table added
+  then if needed).
+- No leagues/fixtures have actually been pulled from the live API in this
+  session (no real Sportmonks token available). Everything above is
+  verified against a real PostgreSQL database and mocked HTTP responses,
+  not a real Sportmonks account.
 
 See `docs/SETUP.md` for environment setup instructions and
 `docs/DATABASE.md` for the full schema reference.
