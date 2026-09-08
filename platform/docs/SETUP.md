@@ -148,6 +148,21 @@ in `docs/BACKTEST.md`. Each fold trains its own ML artifact (under
 `backend/artifacts/xgboost/backtest/`) using only that fold's training
 window — never the shared "production" `v1` model.
 
+## 11. Fit and apply the ensemble + calibration
+
+```bash
+cd platform/backend
+python3 -m app.models.ensemble_cli fit --val-start 2023-08-01 --val-end 2024-08-01
+python3 -m app.models.ensemble_cli apply --start 2024-08-01 --end 2024-09-01
+```
+
+`fit` reads already-stored `model_predictions` (poisson/ml, and
+sportmonks once Phase 9 populates it) for the validation window, fits
+ensemble weights and selects a calibration method, and saves an artifact
+under `backend/artifacts/ensemble/`. `apply` writes
+`raw_ensemble_probability`/`final_probability` onto `model_predictions`
+for fixtures in range, merging into the existing row.
+
 ## Environment variables
 
 | Variable | Required | Default | Purpose |

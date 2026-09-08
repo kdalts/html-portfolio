@@ -38,7 +38,7 @@ before the next begins.
 | 5 | Poisson baseline model | **Done** |
 | 6 | XGBoost model | **Done** |
 | 7 | Backtesting (walk-forward) | **Done** |
-| 8 | Probability calibration | Not started |
+| 8 | Ensemble + probability calibration | **Done** |
 | 9 | Sportmonks model integration | Not started |
 | 10 | Odds and market edge | Not started |
 | 11 | Ranking engine | Not started |
@@ -612,6 +612,86 @@ model_types aren't evaluated here (they don't exist until Phases 8–9) but
 `run_walkforward_backtest`'s `model_types` parameter is built to extend
 to them without changes to this phase's code.
 
+## Phase 8 — Ensemble + probability calibration
+
+The spec's ENSEMBLE section (combine poisson/ml/sportmonks probabilities,
+weights fit on validation data, never fixed) and CALIBRATION section
+(Platt vs. Isotonic, selected on validation data) are bundled into one
+phase, since they're the same two-step pipeline: `raw_ensemble_probability`
+→ `final_probability`. See `docs/MODEL.md` for the full writeup.
+
+**What was built**
+
+- `backend/app/models/ensemble.py` — fits non-negative weights (summing
+  to 1) over whichever of `poisson_probability`/`ml_probability`/
+  `sportmonks_probability` have ≥80% coverage in the validation set,
+  minimizing validation log loss. A source below that coverage threshold
+  gets weight `0.0` — **never guessed** — which is exactly
+  `sportmonks_probability`'s state until Phase 9 populates it; re-fitting
+  later is how it earns a real weight. Applying the weights to a specific
+  row renormalizes over whatever sources are actually present on it, so
+  one missing source doesn't silently shrink the ensemble.
+- `backend/app/models/calibration.py` — fits both Platt scaling and
+  Isotonic regression on validation data and keeps whichever achieves
+  lower validation log loss — the method itself is data-driven, not
+  assumed. Both are serialized as small, self-contained parameter sets
+  (a sigmoid's `(coef, intercept)`; Isotonic's breakpoint arrays) rather
+  than pickled sklearn objects, so applying a saved calibrator later
+  never depends on sklearn or matching library versions.
+- `backend/app/models/ensemble_service.py` — `fit_ensemble_and_calibration`
+  reads already-stored `model_predictions` rows for a validation window,
+  fits both steps, and saves a JSON artifact (same filesystem-artifact
+  pattern as Phase 6). `apply_ensemble_and_calibration_for_fixtures`
+  writes `raw_ensemble_probability`/`ensemble_weights`/
+  `calibration_method`/`final_probability` onto the fixture's existing
+  `model_predictions` row, carrying forward its `predicted_at` rather
+  than refreshing it — see the caught-and-fixed bug below.
+- `backend/app/models/ensemble_cli.py` — `python -m app.models.ensemble_cli
+  fit|apply`.
+
+**A real bug this phase's tests caught:** the first version of
+`apply_ensemble_and_calibration_for_fixtures` upserted only the four new
+columns, omitting `predicted_at`. PostgreSQL validates NOT NULL columns
+against the *proposed* `INSERT` row even when `ON CONFLICT DO UPDATE`
+ends up running instead of the insert — so this failed with a
+`NotNullViolation` on every fixture, despite the row already existing
+with `predicted_at` set. Fixed by carrying the existing row's
+`predicted_at` forward into the upsert, which also happens to be the
+semantically correct choice (adding ensemble/calibration columns to a row
+shouldn't change "when this fixture's prediction was generated").
+
+**Tests** (`backend/tests/`, 231 total — 23 new, all passing)
+
+- `test_ensemble.py` (pure): weights sum to 1 over available sources; an
+  entirely-missing source gets exactly `0.0`, never a guess; an
+  informative source outweighs a noise source; below/above the coverage
+  threshold; per-row renormalization when a source is missing on that
+  specific row.
+- `test_calibration.py` (pure): falls back to `"none"` with too little
+  data or a single class; **calibration measurably improves log loss**
+  on a deliberately overconfident synthetic dataset (not just "runs");
+  both calibrators round-trip through their serialized dict form to
+  identical outputs; Isotonic's output is monotonic; outputs stay in
+  `[0, 1]`.
+- `test_ensemble_service.py` (real PostgreSQL): fitting produces a
+  correct artifact; raises clearly with no validation data or an unfitted
+  config; applying preserves the existing `poisson_probability` while
+  adding the new columns (this is the test that caught the bug above); a
+  fixture with no stored prediction is skipped and recorded; a final
+  sanity check that `final_probability` flows correctly into Phase 2's
+  generated `edge` column once market data is present.
+
+**Remaining risks**
+
+- `sportmonks_probability` has zero weight everywhere right now — Phase 9
+  hasn't populated it yet. The mechanism is ready; nothing here needs to
+  change once it is, only a re-fit.
+- The 0.70 confidence threshold implicit in Phase 7's Hit Rate metric and
+  the ensemble's coverage threshold (0.80) are reasonable defaults, not
+  tuned against real outcomes — there is no real historical data in this
+  session to tune them against.
+
 See `docs/SETUP.md` for environment setup instructions, `docs/DATABASE.md`
-for the full schema reference, and `docs/BACKTEST.md` for backtesting
-methodology.
+for the full schema reference, `docs/BACKTEST.md` for backtesting
+methodology, and `docs/MODEL.md` for the full modeling writeup (Poisson,
+XGBoost, ensemble, calibration together).
