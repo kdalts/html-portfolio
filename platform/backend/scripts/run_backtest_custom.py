@@ -14,11 +14,17 @@ evaluated), then run:
 from __future__ import annotations
 
 import logging
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
-from app.backtest.walkforward import WalkForwardFold, run_walkforward_backtest
-from app.core.config import get_settings
-from app.db.session import get_session_factory
+# Run as a plain script (not `python -m ...`), so the `app` package
+# (one directory up, in backend/) isn't on sys.path by default - add it.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.backtest.walkforward import WalkForwardFold, run_walkforward_backtest  # noqa: E402
+from app.core.config import get_settings  # noqa: E402
+from app.db.session import get_session_factory  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
