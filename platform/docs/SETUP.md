@@ -175,6 +175,18 @@ Copies each fixture's already-ingested `sportmonks_predictions.over_2_5_probabil
 `model_predictions.sportmonks_probability`. Run this before step 11's
 `fit` so the ensemble can see it.
 
+## 13. Sync market odds
+
+```bash
+cd platform/backend
+python3 -m app.models.odds_cli sync --start 2024-08-01 --end 2024-09-01
+```
+
+Picks the latest plausible odds snapshot per bookmaker (from step 6's
+odds ingestion) and writes `market_probability`/`market_odds_over`/
+`market_odds_under` onto `model_predictions` — `edge` then follows
+automatically as a generated column once `final_probability` is also set.
+
 ## Environment variables
 
 | Variable | Required | Default | Purpose |

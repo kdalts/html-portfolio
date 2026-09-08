@@ -40,7 +40,7 @@ before the next begins.
 | 7 | Backtesting (walk-forward) | **Done** |
 | 8 | Ensemble + probability calibration | **Done** |
 | 9 | Sportmonks model integration | **Done** |
-| 10 | Odds and market edge | Not started |
+| 10 | Odds and market edge | **Done** |
 | 11 | Ranking engine | Not started |
 | 12 | Dashboard (Next.js) | Not started |
 | 13 | Automation (n8n) | Not started |
@@ -733,6 +733,57 @@ with nothing ingested, and is idempotent on re-run.
 **Remaining risks** — same as Phase 3: payload shape and the "model
 performance" question above are unverified against a live Sportmonks
 account.
+
+## Phase 10 — Odds and market edge
+
+Like Phase 9, most of the hard work (leakage-guarded ingestion, and the
+math itself) already happened: Phase 3's `ingest_odds_for_fixture` stores
+bookmaker snapshots with `retrieved_at < kickoff` enforced, and Phase 2's
+schema computes `odds.market_probability` (de-vigged) and
+`model_predictions.edge` (`final_probability - market_probability`) as
+PostgreSQL generated columns. Phase 10 is the integration step: pick a
+market snapshot and sync it in — at which point `edge` computes itself.
+
+**What was built**
+
+- `backend/app/models/odds_service.py` — `build_market_snapshot` takes
+  the *latest* odds row per bookmaker for a fixture (not every historical
+  snapshot), keeps only ones with a *plausible* overround (`1.0 <
+  overround < 1.30` — a data-quality guard against stale/malformed odds
+  feeding a misleading edge), and averages `market_probability`/
+  `market_odds_over`/`market_odds_under` across whichever bookmakers
+  qualify. `odds_id` is only set when exactly one bookmaker informed the
+  snapshot (traceable to a specific row); with multiple bookmakers
+  averaged together, it's left `NULL` rather than pointing at an
+  arbitrarily-chosen one. **The module never reads
+  `over_implied_probability`/`under_implied_probability`** (the raw,
+  vig-inflated figures) — only the de-vigged `market_probability` — which
+  is the concrete enforcement of the spec's "do not call a selection a
+  value bet solely because the model probability is higher than the raw
+  bookmaker implied probability."
+  `sync_and_store_market_data` is the usual per-item-isolated batch
+  driver, carrying forward `predicted_at` as Phase 8/9 established.
+- `backend/app/models/odds_cli.py` — `python -m app.models.odds_cli sync
+  --start ... --end ...`.
+
+**Tests** (`backend/tests/`, 248 total — 10 new, all passing)
+
+`test_odds_service.py` (real PostgreSQL) — a source-level guard proving
+the module never *accesses* the raw implied-probability fields (only
+mentions them in its docstring, to explain why not); the snapshot's
+`market_probability` matches the DB-computed de-vigged figure and is
+verified numerically different from the raw implied probability;
+averaging across multiple bookmakers; using each bookmaker's *latest*
+snapshot rather than a stale earlier one; an implausible overround
+rejected; **`edge` verified to fall out of Phase 2's generated column
+automatically** once `market_probability` and `final_probability` are
+both present — no Python computes it; failure/idempotency handling.
+
+**Remaining risks** — same as Phase 3/9: no real odds have been ingested
+in this session (no live Sportmonks token, and `ODDS_MARKET_ID_OVER_UNDER`
+in `sportmonks_reference.py` is still a placeholder). The overround
+plausibility bounds (1.0–1.30) are a reasonable default, not tuned
+against real market data.
 
 See `docs/SETUP.md` for environment setup instructions, `docs/DATABASE.md`
 for the full schema reference, `docs/BACKTEST.md` for backtesting
