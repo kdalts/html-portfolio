@@ -84,6 +84,20 @@ Then check:
   if `SPORTMONKS_API_TOKEN` is set and valid, or a `502`/`503` with a
   descriptive error otherwise.
 
+See `docs/API.md` for the full read API the dashboard (below) consumes.
+
+## 5b. Run the dashboard locally
+
+```bash
+cd platform/frontend
+npm install
+cp .env.example .env.local   # set API_BASE_URL if the API isn't on localhost:8000
+npm run dev
+```
+
+Open http://localhost:3000. Requires the backend API (step 5) running.
+See `frontend/README.md` for the page list and architecture notes.
+
 ## 6. Run historical ingestion
 
 ```bash
@@ -216,6 +230,7 @@ for that date's fixtures.
 | `SPORTMONKS_REQUESTS_PER_MINUTE` | No | `60` | Client-side throttle budget |
 | `DATABASE_URL` | Yes | — | PostgreSQL connection string (app + Alembic) |
 | `DATABASE_ECHO` | No | `false` | Log all SQL statements |
+| `CORS_ALLOWED_ORIGINS` | No | `http://localhost:3000` | Comma-separated origins allowed to call the read API |
 | `TEST_DATABASE_URL` | No (tests only) | `postgresql+psycopg://postgres:postgres@localhost:5432/football_platform_test` | DB used by `tests/test_db_integration.py` |
 
 Further phases will add more variables, documented here as they are

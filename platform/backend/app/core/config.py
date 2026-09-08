@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     database_url: str
     database_echo: bool = False
 
+    # --- API / frontend --------------------------------------------------------------
+    # Comma-separated origins allowed to call the read API via CORS (the
+    # Next.js dashboard's dev/prod origin). Never a wildcard by default -
+    # this API serves data, not secrets, but an explicit allowlist is
+    # still the safer default.
+    cors_allowed_origins: str = "http://localhost:3000"
+
     @field_validator("sportmonks_api_token")
     @classmethod
     def _token_not_blank(cls, value: str) -> str:
