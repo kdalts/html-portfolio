@@ -99,11 +99,24 @@ def run_daily_pipeline(
     ensemble_artifact_dir: Path = DEFAULT_ENSEMBLE_ARTIFACT_DIR,
     top_n: int = DEFAULT_TOP_N,
     min_confidence: float = DEFAULT_MIN_CONFIDENCE,
+    reliability_model_type: str = "final",
     commit: bool = True,
 ) -> DailyPipelineReport:
     """`settings` defaults to get_settings() (the normal CLI path) but can
     be passed explicitly so callers (tests included) aren't tied to
     process-wide environment variables.
+
+    `reliability_model_type` defaults to "final" (the fully-calibrated
+    ensemble output - the intended production signal per the spec) but is
+    overridable: league_model_performance only has rows for whichever
+    model_type(s) have actually been through app.ranking.cli
+    league-reliability, itself downstream of a walk-forward backtest for
+    that model_type. Walk-forward backtesting the 'final' ensemble model
+    per fold is a larger feature not yet built (see Phase 11's remaining
+    risks) - until then, a real deployment that has only backtested
+    'poisson'/'ml' should pass one of those here, or every league will
+    look "no data" and nothing will ever rank, regardless of how good the
+    underlying poisson/ml reliability scores actually are.
 
     `commit` defaults to True so a real automation run persists each step's
     progress as it goes (a later step failing shouldn't roll back earlier,
@@ -245,6 +258,7 @@ def run_daily_pipeline(
             session,
             ranking_date=ranking_date,
             model_version=model_version,
+            reliability_model_type=reliability_model_type,
             top_n=top_n,
             min_confidence=min_confidence,
             commit=commit,

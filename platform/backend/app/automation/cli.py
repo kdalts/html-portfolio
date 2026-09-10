@@ -2,7 +2,7 @@
 single command a scheduler (n8n, cron, ...) needs to run.
 
 Usage:
-    python -m app.automation.cli run [--date 2024-08-17]
+    python -m app.automation.cli run [--date 2024-08-17] [--reliability-model-type final]
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from app.integrations.sportmonks.client import SportmonksClient
 logger = logging.getLogger(__name__)
 
 
-def _run(date_str: str | None) -> int:
+def _run(date_str: str | None, reliability_model_type: str) -> int:
     ranking_date = (
         datetime.strptime(date_str, "%Y-%m-%d").date() if date_str else datetime.now(timezone.utc).date()
     )
@@ -29,7 +29,13 @@ def _run(date_str: str | None) -> int:
     session = get_session_factory(settings)()
     try:
         with SportmonksClient(settings) as client:
-            report = run_daily_pipeline(session, client, ranking_date=ranking_date, settings=settings)
+            report = run_daily_pipeline(
+                session,
+                client,
+                ranking_date=ranking_date,
+                settings=settings,
+                reliability_model_type=reliability_model_type,
+            )
     finally:
         session.close()
 
@@ -48,9 +54,19 @@ def main(argv: list[str] | None = None) -> int:
 
     run_parser = subparsers.add_parser("run", help="Run the full daily pipeline for a date (default: today)")
     run_parser.add_argument("--date", default=None, help="YYYY-MM-DD, defaults to today (UTC)")
+    run_parser.add_argument(
+        "--reliability-model-type",
+        default="final",
+        help=(
+            "model_type to check league eligibility against (default: final). "
+            "Only model_types that have gone through 'app.ranking.cli league-reliability' "
+            "have any league_model_performance rows at all - pass 'poisson' or 'ml' if "
+            "'final' hasn't been backtested yet, or nothing will ever qualify."
+        ),
+    )
 
     args = parser.parse_args(argv)
-    return _run(args.date)
+    return _run(args.date, args.reliability_model_type)
 
 
 if __name__ == "__main__":
