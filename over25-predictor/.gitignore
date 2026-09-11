@@ -1,0 +1,7 @@
+.env
+config.json
+cache/
+*.log
+__pycache__/
+*.pyc
+output/
