@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 import httpx
 from sqlalchemy import select
 
-from app.automation.daily_pipeline import run_daily_pipeline
+from app.automation.daily_pipeline import run_daily_pipeline, run_pipeline_for_date_range
 from app.db.models.evaluation import DailyRanking, LeagueModelPerformance
 from app.db.models.features import MatchFeatures, TeamFeatures
 from app.db.models.fixtures import Fixture
@@ -119,6 +119,42 @@ def test_pipeline_runs_every_step_and_isolates_missing_prerequisites(db_session,
     assert report.all_ok is False
 
     # the fixture itself was still ingested despite later steps failing
+    assert db_session.get(Fixture, 1) is not None
+
+
+def test_pipeline_for_date_range_runs_once_per_day_and_finds_the_fixture_on_its_own_day(
+    db_session, dummy_settings, tmp_path
+):
+    client = _client(dummy_settings)
+    reports = run_pipeline_for_date_range(
+        db_session,
+        client,
+        start_date=date(2024, 8, 19),
+        days=3,
+        settings=dummy_settings,
+        ml_artifact_dir=tmp_path / "ml",
+        ensemble_artifact_dir=tmp_path / "ensemble",
+        commit=False,
+    )
+
+    # one report per day, in order, regardless of whether that day had
+    # anything to rank - same failure/emptiness isolation as a single day.
+    assert [r.ranking_date for r in reports] == [date(2024, 8, 19), date(2024, 8, 20), date(2024, 8, 21)]
+
+    by_date = {r.ranking_date: r for r in reports}
+    considered = {
+        r.ranking_date: next(s.detail for s in r.steps if s.name == "rank_fixtures") for r in reports
+    }
+    # the mocked fixture's kickoff is fixed at 2024-08-20 - only that day's
+    # run should consider it as an upcoming fixture to rank; the day before
+    # and after correctly see nothing to consider for it.
+    assert "considered=0" in considered[date(2024, 8, 19)]
+    assert "considered=1" in considered[date(2024, 8, 20)]
+    assert "considered=0" in considered[date(2024, 8, 21)]
+
+    # every day's ingestion step still ran (re-ingesting the same fixture
+    # is idempotent, not an error) and the fixture itself is in the DB.
+    assert all(s.status == "ok" for r in by_date.values() for s in r.steps if s.name == "retrieve_upcoming_fixtures")
     assert db_session.get(Fixture, 1) is not None
 
 

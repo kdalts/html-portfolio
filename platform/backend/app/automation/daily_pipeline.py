@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import select
@@ -280,3 +280,53 @@ def run_daily_pipeline(
 
     report.finished_at = datetime.now(timezone.utc)
     return report
+
+
+def run_pipeline_for_date_range(
+    session: Session,
+    client: SportmonksClient,
+    *,
+    start_date: date,
+    days: int,
+    settings: Settings | None = None,
+    model_version: str = DEFAULT_MODEL_VERSION,
+    ml_artifact_dir: Path = DEFAULT_ML_ARTIFACT_DIR,
+    ensemble_artifact_dir: Path = DEFAULT_ENSEMBLE_ARTIFACT_DIR,
+    top_n: int = DEFAULT_TOP_N,
+    min_confidence: float = DEFAULT_MIN_CONFIDENCE,
+    reliability_model_type: str = "final",
+    commit: bool = True,
+) -> list[DailyPipelineReport]:
+    """Runs `run_daily_pipeline` once per day across [start_date, start_date +
+    days) - lets an operator pre-populate a week's (or any N days') worth of
+    fixtures/features/predictions/rankings in one command, rather than
+    needing to run this fresh every single day. Each day is fully
+    independent: one day's failures (or an empty matchday) don't stop the
+    rest from running, the same failure-isolation philosophy as every step
+    inside a single day's run.
+
+    Real caveat, not a bug: predictions/odds pulled this far ahead of
+    kickoff are inherently less final than pulling them the day of - both
+    Sportmonks' own predictions and bookmaker lines commonly firm up in the
+    days immediately before a match. This is still leakage-safe (every
+    write here happens strictly pre-kickoff, same guard as everywhere else
+    in this codebase) - it's a data-freshness tradeoff, not a data-integrity
+    one, and it's the deliberate point of running this less often."""
+    reports: list[DailyPipelineReport] = []
+    for offset in range(days):
+        ranking_date = start_date + timedelta(days=offset)
+        report = run_daily_pipeline(
+            session,
+            client,
+            ranking_date=ranking_date,
+            settings=settings,
+            model_version=model_version,
+            ml_artifact_dir=ml_artifact_dir,
+            ensemble_artifact_dir=ensemble_artifact_dir,
+            top_n=top_n,
+            min_confidence=min_confidence,
+            reliability_model_type=reliability_model_type,
+            commit=commit,
+        )
+        reports.append(report)
+    return reports
