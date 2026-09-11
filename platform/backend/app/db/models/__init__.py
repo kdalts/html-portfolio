@@ -2,6 +2,7 @@
 Alembic autogenerate and for Base.metadata.create_all in tests)."""
 
 from app.db.base import Base
+from app.db.models.checklist import ChecklistScore
 from app.db.models.evaluation import BacktestResult, DailyRanking, LeagueModelPerformance
 from app.db.models.features import MatchFeatures, TeamFeatures
 from app.db.models.fixtures import Fixture
@@ -25,4 +26,5 @@ __all__ = [
     "BacktestResult",
     "LeagueModelPerformance",
     "DailyRanking",
+    "ChecklistScore",
 ]

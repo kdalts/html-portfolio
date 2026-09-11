@@ -13,7 +13,7 @@ import logging
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import backtest, fixtures, leagues, models, rankings, system
+from app.api.routes import backtest, checklist, fixtures, leagues, models, rankings, system
 from app.core.config import get_settings
 from app.integrations.sportmonks.client import SportmonksClient
 from app.integrations.sportmonks.exceptions import SportmonksError
@@ -40,6 +40,7 @@ app.include_router(leagues.router)
 app.include_router(models.router)
 app.include_router(backtest.router)
 app.include_router(system.router)
+app.include_router(checklist.router)
 
 
 @app.get("/health")

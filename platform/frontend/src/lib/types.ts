@@ -147,3 +147,36 @@ export interface SystemHealthResponse {
   counts: Record<string, number>;
   latest: Record<string, string | null>;
 }
+
+export interface ChecklistEntry {
+  fixture_id: number;
+  home_team: string;
+  away_team: string;
+  league_name: string;
+  kickoff: string;
+  checks_passed: number;
+  checks_computable: number;
+  score_pct: number | null;
+  sample_size_ok: boolean | null;
+  btts_rate_ok: boolean | null;
+  clean_sheet_rate_ok: boolean | null;
+  combined_goals_ok: boolean | null;
+  league_gap_ok: boolean | null;
+  shots_on_target_ok: boolean | null;
+  attack_defence_split_ok: boolean | null;
+  xg_ok: boolean | null;
+  h2h_ok: boolean | null;
+  recent_form_ok: boolean | null;
+  vs_league_avg_ok: boolean | null;
+  early_goals_ok: boolean | null;
+  late_goals_ok: boolean | null;
+  key_players_missing: string;
+  context_notes: string | null;
+  data_gaps: string | null;
+  computed_at: string;
+}
+
+export interface ChecklistResponse {
+  checklist_date: string;
+  entries: ChecklistEntry[];
+}

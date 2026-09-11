@@ -45,6 +45,7 @@ before the next begins.
 | 11 | Ranking engine | **Done** |
 | 12 | Dashboard (Next.js) | **Done** |
 | 13 | Automation (n8n) | **Done** |
+| 14 | 15-point checklist | **Done** |
 
 ## Phase 1 — Sportmonks connection
 
@@ -1062,6 +1063,101 @@ python3 -m pytest -v
   responses — see "Remaining risks" in Phases 1, 3, 6, 9, 10, and 12 for
   what a real deployment still needs to verify against a live Sportmonks
   token and real historical data before going live.
+
+## Phase 14 — 15-point checklist
+
+A second, independent scoring system alongside the probability/confidence/
+edge pipeline above — requested as a rule-based checklist covering BTTS
+rate, clean sheet rate, combined goals, league position gap, shots on
+target, xG, head-to-head, recent form, league averages, goal timing, and
+missing players/context, deliberately never combined into the main model's
+output (the two are shown on separate dashboard pages, on purpose — a
+checklist score and a calibrated probability answer different questions and
+conflating them would misrepresent both).
+
+**What was built**
+
+- `backend/app/checklist/checks.py` — the 13 scored items as pure functions,
+  each returning `True`/`False`/`None` ("N/A" — never a guessed value when a
+  check can't be evaluated). Two items needed a documented interpretation
+  call where the original wording was ambiguous against what data actually
+  exists: item 8 (xG) sums both teams' xG-for and xG-against, and item 11
+  (vs league average) compares each team against that league's
+  venue-specific average (home vs league home-goals average, away vs
+  league away-goals average) rather than one blended figure, since
+  `match_features` already stores those separately.
+- `backend/app/checklist/standings.py` — computes a league table purely
+  from stored fixture results (points, goal difference, position) — no new
+  ingestion needed, and leakage-safe by the same `kickoff < before`
+  discipline as every other feature in this codebase.
+- `backend/app/checklist/service.py` — gathers each team's current-season
+  history (reusing Phase 4's `fetch_team_appearances`) and this matchup's
+  standings/head-to-head context, calls the check functions, and stores one
+  row per fixture in the new `checklist_scores` table. Item 1 (sample size)
+  is the one item that excludes a fixture entirely rather than scoring it
+  N/A, per the spec: a fixture where either team has fewer than 5 games
+  played this season never gets a row, and the batch driver records that
+  as an isolated failure, same pattern as every "insufficient data" case
+  elsewhere in this codebase.
+- `backend/app/checklist/cli.py` — `python -m app.checklist.cli build
+  --start ... --end ...`.
+- `backend/app/api/routes/checklist.py` — `GET
+  /api/checklist/daily?checklist_date=...`, read-only like every other
+  endpoint.
+- `frontend/src/app/checklist/page.tsx` — the **15-Point Checklist**
+  dashboard page: a date picker, sorted by score, every check shown as a
+  ✓/✗/— column (hover a header for the full description), plus context
+  notes and an honest data-gaps disclosure per fixture.
+
+**Honest data-gap accounting** (the spec's own explicit requirement: never
+fake a stat, always disclose what's missing) — items 6 (shots on target)
+and 8 (xG) are computable in principle now that Phase 9's real Sportmonks
+type IDs are configured, but only once match_statistics/match_xg are
+actually backfilled (`--with-statistics` on historical ingestion, not run
+by default); items 12-13 (goal timing) are always N/A — no events/
+goal-timeline table exists anywhere in this schema yet, a genuine gap for
+a future phase, not a bug; item 14 (missing players) always reports
+`"Unknown"` — no injuries data source is hooked up. Every one of these
+shows up in the stored `data_gaps` text rather than silently vanishing.
+
+**Tests** (`backend/tests/`, 319 total — 21 new, all passing)
+
+- `test_checklist_checks.py` (pure): every one of the 13 check functions
+  against a clear pass, a clear fail, and the missing-data N/A case.
+- `test_checklist_standings.py` (real PostgreSQL): correct points/goal-
+  difference ordering; a match at or after the cutoff never affects the
+  table (leakage boundary); a team with no qualifying matches is omitted,
+  not given a false position.
+- `test_checklist_service.py` (real PostgreSQL): a fully-populated fixture
+  produces the exact hand-computed result across all 13 items; the target
+  fixture's own result is proven never to leak into its own checklist; a
+  fixture below the 5-games threshold is excluded, not scored; the batch
+  driver stores qualifying fixtures, records excluded ones as failures,
+  and is idempotent on re-run.
+- Two new cases in `test_api.py` for the `/api/checklist/daily` route.
+- Verified as a real, running page — not just compiled: `npx tsc --noEmit`,
+  `npm run lint`, and `npm run build` all clean, and the backend/frontend
+  dev servers were run together against a seeded database, with the
+  rendered HTML confirmed (via curl against the running server) to contain
+  real seeded team names, score, relegation-zone context note, and
+  data-gaps text — not placeholder markup.
+
+**Remaining risks**
+
+- Goal-timing (items 12-13) and missing-players (item 14) data sources
+  don't exist in this platform yet — real, flagged gaps, not silently
+  faked. Building them would mean a new fixture-events ingestion path (and
+  table) and an injuries/sidelined integration respectively — both
+  reasonable future phases, deliberately not built here to avoid scope
+  creep into this phase.
+- The two documented interpretation calls (items 8 and 11, above) reflect
+  a reasonable, data-grounded reading of ambiguous spec wording, not the
+  only possible one — worth revisiting if the intended meaning was
+  different.
+- No real deployment has exercised `--with-statistics` backfill in this
+  session, so items 6/8 have only ever been verified as correctly N/A
+  (the honest state), never as a genuinely populated TRUE/FALSE against
+  real shots-on-target/xG data.
 
 See `docs/SETUP.md` for environment setup instructions, `docs/DATABASE.md`
 for the full schema reference, `docs/BACKTEST.md` for backtesting

@@ -9,6 +9,7 @@
 
 import type {
   BacktestRunSummary,
+  ChecklistResponse,
   DailyRankingResponse,
   FixtureDetailResponse,
   LeaguePerformanceEntry,
@@ -58,4 +59,8 @@ export function getBacktestRuns(): Promise<BacktestRunSummary[]> {
 
 export function getSystemHealth(): Promise<SystemHealthResponse> {
   return apiFetch(`/api/system/health`);
+}
+
+export function getDailyChecklist(date: string): Promise<ChecklistResponse> {
+  return apiFetch(`/api/checklist/daily?checklist_date=${date}`);
 }

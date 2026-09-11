@@ -8,6 +8,7 @@ from datetime import date, datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
 
+from app.db.models.checklist import ChecklistScore
 from app.db.models.evaluation import BacktestResult, DailyRanking, LeagueModelPerformance
 from app.db.models.features import MatchFeatures, TeamFeatures
 from app.db.models.fixtures import Fixture
@@ -194,3 +195,53 @@ def test_system_health_endpoint(client, db_session):
     assert body["database_connected"] is True
     assert body["counts"]["fixtures"] == 1
     assert body["counts"]["leagues"] == 1
+
+
+def test_daily_checklist_endpoint(client, db_session):
+    _seed_full_fixture(db_session)
+    db_session.add(
+        ChecklistScore(
+            fixture_id=1,
+            computed_at=NOW,
+            sample_size_ok=True,
+            btts_rate_ok=True,
+            clean_sheet_rate_ok=False,
+            combined_goals_ok=None,
+            league_gap_ok=None,
+            shots_on_target_ok=None,
+            attack_defence_split_ok=None,
+            xg_ok=None,
+            h2h_ok=None,
+            recent_form_ok=None,
+            vs_league_avg_ok=None,
+            early_goals_ok=None,
+            late_goals_ok=None,
+            checks_passed=1,
+            checks_computable=3,
+            score_pct=1 / 3,
+            key_players_missing="Unknown",
+            context_notes=None,
+            data_gaps="shots-on-target not ingested for one or both teams",
+        )
+    )
+    db_session.flush()
+
+    response = client.get("/api/checklist/daily", params={"checklist_date": "2024-08-17"})
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["entries"]) == 1
+    entry = body["entries"][0]
+    assert entry["fixture_id"] == 1
+    assert entry["home_team"] == "Home FC"
+    assert entry["checks_passed"] == 1
+    assert entry["checks_computable"] == 3
+    assert entry["btts_rate_ok"] is True
+    assert entry["clean_sheet_rate_ok"] is False
+    assert entry["combined_goals_ok"] is None
+    assert "shots-on-target" in entry["data_gaps"]
+
+
+def test_daily_checklist_empty_date_returns_empty_list(client, db_session):
+    response = client.get("/api/checklist/daily", params={"checklist_date": "2030-01-01"})
+    assert response.status_code == 200
+    assert response.json()["entries"] == []

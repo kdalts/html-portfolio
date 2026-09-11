@@ -235,6 +235,24 @@ the rest of the run — check the logged per-step status. Set
 (Slack/Discord/n8n's own Webhook node/...) instead of only logged. See
 `docs/DEPLOYMENT.md` for scheduling this with n8n or cron in production.
 
+## 16. Run the 15-point checklist
+
+```bash
+cd platform/backend
+python3 -m app.checklist.cli build --start 2024-08-01 --end 2025-08-01
+```
+
+A separate, independent scoring system from the probability/confidence/edge
+model above: a fixed rule checklist (BTTS rate, clean sheet rate, combined
+goals, league position gap, shots on target, xG, head-to-head, recent form,
+league averages, and two goal-timing checks that are always N/A until a
+future events-ingestion phase exists), each item TRUE/FALSE/N/A, never a
+guessed value. Requires features (step 7) computed for the range. A fixture
+where either team has fewer than 5 games played this season is excluded
+entirely (not scored), per the checklist's own first item. View results on
+the dashboard's **15-Point Checklist** page, or via `GET
+/api/checklist/daily?checklist_date=...`.
+
 ## Environment variables
 
 | Variable | Required | Default | Purpose |

@@ -165,3 +165,36 @@ class SystemHealthResponse(_ApiModel):
     sportmonks_token_configured: bool
     counts: dict[str, int]
     latest: dict[str, datetime | None]
+
+
+class ChecklistEntry(_ApiModel):
+    fixture_id: int
+    home_team: str
+    away_team: str
+    league_name: str
+    kickoff: datetime
+    checks_passed: int
+    checks_computable: int
+    score_pct: float | None
+    sample_size_ok: bool | None
+    btts_rate_ok: bool | None
+    clean_sheet_rate_ok: bool | None
+    combined_goals_ok: bool | None
+    league_gap_ok: bool | None
+    shots_on_target_ok: bool | None
+    attack_defence_split_ok: bool | None
+    xg_ok: bool | None
+    h2h_ok: bool | None
+    recent_form_ok: bool | None
+    vs_league_avg_ok: bool | None
+    early_goals_ok: bool | None
+    late_goals_ok: bool | None
+    key_players_missing: str
+    context_notes: str | None
+    data_gaps: str | None
+    computed_at: datetime
+
+
+class ChecklistResponse(_ApiModel):
+    checklist_date: date
+    entries: list[ChecklistEntry]

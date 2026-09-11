@@ -20,6 +20,7 @@ REQUIRED_TABLES = {
     "backtest_results",
     "league_model_performance",
     "daily_rankings",
+    "checklist_scores",  # Phase 14: the 15-point rule checklist, added beyond the original 14 tables
 }
 
 
