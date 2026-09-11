@@ -28,8 +28,9 @@ from datetime import datetime
 from api_client import ApiFootballClient
 from checks import MatchContext
 from config import SETTINGS
-from emailer import send_csv_email
+from emailer import send_email_with_attachments
 from fixtures import fetch_fixtures_next_n_days
+from html_report import write_html_report
 from logger_setup import setup_logging
 from scoring import score_fixture, sort_rows, write_csv
 from team_stats import attach_standings, fetch_team_season_stats, league_average_goals_per_game
@@ -174,6 +175,12 @@ def main() -> int:
         rows = sort_rows(rows)
         today_str = started_at.strftime("%Y-%m-%d")
         csv_path = write_csv(rows, SETTINGS.output_dir, f"over25_predictions_{today_str}.csv")
+        html_path = write_html_report(
+            rows, SETTINGS.output_dir, f"over25_predictions_{today_str}.html",
+            report_date=today_str, fixtures_scanned=len(fixtures),
+            high_score_threshold=SETTINGS.high_score_threshold,
+            high_score_count=matches_qualifying_high, api_calls=client.call_count,
+        )
 
         if send_email and rows:
             subject = f"Over 2.5 Goals Predictions - {today_str} ({len(rows)} matches found)"
@@ -184,12 +191,14 @@ def main() -> int:
                 f"Matches scoring {SETTINGS.high_score_threshold}+ checks: {matches_qualifying_high}\n"
                 f"API calls made this run: {client.call_count} (cache hits: {client.cache_hits})\n"
                 f"Errors: {len(errors)}\n\n"
-                f"See the attached CSV for the full, ranked list."
+                f"Two attachments: a CSV (for Excel/filtering) and an HTML report "
+                f"(sortable/filterable, open the HTML file in a browser for the easiest read)."
             )
             try:
-                send_csv_email(
+                send_email_with_attachments(
                     SETTINGS.smtp_host, SETTINGS.smtp_port, SETTINGS.gmail_address,
-                    SETTINGS.gmail_app_password, SETTINGS.email_to, subject, body, csv_path,
+                    SETTINGS.gmail_app_password, SETTINGS.email_to, subject, body,
+                    [csv_path, html_path],
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.error("Failed to send email: %s", exc)

@@ -15,9 +15,30 @@ surfaces candidate matches with supporting data for you to review yourself.
 3. `checks.py` runs the 15-point checklist (below) against every fixture.
 4. `scoring.py` scores each fixture (`checks_passed` / `checks_computable`)
    and writes a ranked CSV.
-5. `emailer.py` emails the CSV to you via Gmail SMTP.
-6. `over25_predictor.py` is the entry point that wires all of the above
+5. `html_report.py` builds a sortable, filterable, colour-coded HTML report
+   from the same rows — much easier to scan than 22+ CSV columns.
+6. `emailer.py` emails both the CSV and the HTML report to you via Gmail SMTP.
+7. `over25_predictor.py` is the entry point that wires all of the above
    together and logs each run to `over25_predictor.log`.
+
+## Why API-Football (and not something else)
+
+Worth being explicit about this since a few alternatives were considered:
+- **SportMonks** is a viable paid alternative with similar breadth, but
+  costs more without fixing the real limiting factor — xG simply isn't
+  published for most leagues by *any* vendor, not an API-Football gap.
+- **football-data.org** is free and clean but only covers ~12 top
+  competitions, which fails the "worldwide" requirement outright, and lacks
+  shots/BTTS/injuries granularity.
+- **FBref / Understat** have the richest underlying stats (especially xG)
+  but no official API — using them means scraping HTML, reintroducing the
+  exact "breaks silently on an unattended daily job" problem this tool was
+  built to avoid (the same reason the original spec ruled out
+  soccerstats.com).
+
+API-Football is the only option that's simultaneously worldwide, a stable
+JSON REST API (not scraping), and covers fixtures + standings + team stats
++ match events (needed for checks 12/13) + injuries from one vendor.
 
 ## Setup
 
@@ -193,7 +214,8 @@ over25-predictor/
   team_stats.py                per-team stats layer (standings, form, xG, injuries)
   checks.py                    the 15-point checklist
   scoring.py                    CSV row building + writing
-  emailer.py                    Gmail SMTP sender
+  html_report.py                sortable/filterable HTML report builder
+  emailer.py                    Gmail SMTP sender (CSV + HTML attachments)
   logger_setup.py                logging config
   run_over25_predictor.bat  manual/scheduled runner
   setup_task_scheduler.ps1  registers the daily Task Scheduler job

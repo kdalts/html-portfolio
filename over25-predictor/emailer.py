@@ -17,7 +17,10 @@ from pathlib import Path
 log = logging.getLogger("over25.emailer")
 
 
-def send_csv_email(
+_SUBTYPES = {".csv": ("text", "csv"), ".html": ("text", "html"), ".htm": ("text", "html")}
+
+
+def send_email_with_attachments(
     smtp_host: str,
     smtp_port: int,
     gmail_address: str,
@@ -25,7 +28,7 @@ def send_csv_email(
     to_address: str,
     subject: str,
     body: str,
-    attachment_path: Path,
+    attachment_paths: list[Path],
 ) -> None:
     msg = EmailMessage()
     msg["From"] = gmail_address
@@ -33,13 +36,14 @@ def send_csv_email(
     msg["Subject"] = subject
     msg.set_content(body)
 
-    data = attachment_path.read_bytes()
-    msg.add_attachment(
-        data,
-        maintype="text",
-        subtype="csv",
-        filename=attachment_path.name,
-    )
+    for attachment_path in attachment_paths:
+        maintype, subtype = _SUBTYPES.get(attachment_path.suffix.lower(), ("application", "octet-stream"))
+        msg.add_attachment(
+            attachment_path.read_bytes(),
+            maintype=maintype,
+            subtype=subtype,
+            filename=attachment_path.name,
+        )
 
     log.info("Sending email to %s via %s:%s ...", to_address, smtp_host, smtp_port)
     with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
